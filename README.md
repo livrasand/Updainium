@@ -1,4 +1,4 @@
-# Updainium
+# <img src="./static/logo.png" width="32" height="32" style="vertical-align: middle;" /> Updainium
 
 Get release files straight from the source.
 
