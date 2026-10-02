@@ -37,7 +37,13 @@ jobs:
       - name: Verify macOS ad-hoc signature
         if: runner.os == 'macOS'
         run: |
-          app_path="$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          dmg_path="$(find src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$dmg_path"
+          mount_path="$RUNNER_TEMP/updainium-dmg"
+          mkdir -p "$mount_path"
+          hdiutil attach "$dmg_path" -nobrowse -readonly -mountpoint "$mount_path"
+          trap 'hdiutil detach "$mount_path" -quiet' EXIT
+          app_path="$(find "$mount_path" -maxdepth 1 -name '*.app' -print -quit)"
           test -n "$app_path"
           codesign --verify --deep --strict --verbose=2 "$app_path"
       - uses: actions/upload-artifact@v4
