@@ -1,0 +1,63 @@
+name: Publish release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Release tag (for example, v0.1.0)
+        required: true
+        type: string
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            bundles: deb,rpm,appimage
+          - os: windows-latest
+            bundles: msi,nsis
+          - os: macos-latest
+            bundles: dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev libwebkit2gtk-4.1-dev patchelf rpm
+      - run: npm ci
+      - run: npm run tauri -- build --bundles ${{ matrix.bundles }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundles-${{ runner.os }}
+          path: src-tauri/target/release/bundle
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Prepare release assets and checksums
+        run: |
+          mkdir release
+          find dist -type f \( -iname '*.appimage' -o -iname '*.deb' -o -iname '*.dmg' -o -iname '*.exe' -o -iname '*.msi' -o -iname '*.rpm' \) -exec cp {} release/ \;
+          test -n "$(find release -type f -print -quit)"
+          (cd release && sha256sum * > SHA256SUMS)
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: gh release create "$TAG_NAME" release/* --target "$GITHUB_SHA" --title "$TAG_NAME" --generate-notes
