@@ -34,6 +34,12 @@ jobs:
           sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev libwebkit2gtk-4.1-dev patchelf rpm
       - run: npm ci
       - run: npm run tauri -- build --bundles ${{ matrix.bundles }}
+      - name: Verify macOS ad-hoc signature
+        if: runner.os == 'macOS'
+        run: |
+          app_path="$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
       - uses: actions/upload-artifact@v4
         with:
           name: bundles-${{ runner.os }}
