@@ -15,6 +15,10 @@ Updainium tracks public repositories on GitHub, GitLab, Gitea, Forgejo, and comp
 
 Inspired by the incredible [Obtainium](https://github.com/ImranR98/Obtainium), but natively tailored for your desktop operating system.
 
+> [!IMPORTANT]
+> **macOS Users:** You may see a warning that Apple cannot verify Updainium. This happens because the app is distributed outside the App Store and is not notarized yet. Allow it via System Settings → Privacy & Security → Open Anyway.
+
+
 ## Limitations
 - For some sources, data is gathered using Web scraping and can easily break due to changes in website design. In such cases, more reliable methods may be unavailable.
 
