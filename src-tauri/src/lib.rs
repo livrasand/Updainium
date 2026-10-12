@@ -1,4 +1,6 @@
 use std::{fs, io::Write, process::Command};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use sha2::{Digest, Sha256};
 use tauri::{
     menu::{Menu, MenuItem},
@@ -390,6 +392,7 @@ fn identify_windows_app_identifier_from_path(path: &std::path::Path) -> Result<S
     for root in roots {
         let output = Command::new("reg")
             .args(["query", root, "/s"])
+            .creation_flags(0x08000000)
             .output()
             .map_err(|error| error.to_string())?;
         let mut key = String::new();
@@ -578,6 +581,7 @@ fn identify_windows_app_identifier(app_name: &str) -> Result<Option<String>, Str
     for root in roots {
         let output = Command::new("reg")
             .args(["query", root, "/s", "/v", "DisplayName"])
+            .creation_flags(0x08000000)
             .output()
             .map_err(|error| error.to_string())?;
         let mut key = String::new();
@@ -741,6 +745,7 @@ fn installed_windows_version(identifier: &str) -> Result<Option<String>, String>
         let key = format!(r"{root}\{identifier}");
         let entry = Command::new("reg")
             .args(["query", &key])
+            .creation_flags(0x08000000)
             .output()
             .map_err(|error| error.to_string())?;
         if !entry.status.success() {
@@ -748,6 +753,7 @@ fn installed_windows_version(identifier: &str) -> Result<Option<String>, String>
         }
         let version = Command::new("reg")
             .args(["query", &key, "/v", "DisplayVersion"])
+            .creation_flags(0x08000000)
             .output()
             .map_err(|error| error.to_string())?;
         let value = String::from_utf8_lossy(&version.stdout)
