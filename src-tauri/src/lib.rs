@@ -45,7 +45,6 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
-                // Native editing and quit shortcuts require their menu actions on macOS.
                 let menu = Menu::default(app.handle())?;
                 if let Some(app_menu) = menu.items()?.first().and_then(|item| item.as_submenu()) {
                     app_menu.set_text("Updainium")?;
@@ -101,6 +100,8 @@ pub fn run() {
 }
 
 fn show_main_window(app: &tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    let _ = app.set_dock_visibility(true);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -153,9 +154,6 @@ fn sha256_field(value: &serde_json::Value) -> Option<String> {
         .then(|| digest.to_ascii_lowercase())
 }
 
-/// GitHub, Gitea and Forgejo expose assets as an array of objects using
-/// `browser_download_url`; GitLab nests them under `assets.links` and calls the
-/// download field `direct_asset_url`.
 fn normalize_release(payload: serde_json::Value) -> Release {
     let payload = match payload {
         serde_json::Value::Array(mut items) if !items.is_empty() => items.remove(0),
@@ -210,9 +208,6 @@ fn normalize_release(payload: serde_json::Value) -> Release {
     }
 }
 
-/// Fetches release metadata from the backend instead of the WebView: forge APIs
-/// do not send `Access-Control-Allow-Origin`, so a `fetch()` from the Tauri page
-/// is rejected by WebKit even when the server is reachable.
 #[tauri::command]
 async fn fetch_release_metadata(api_urls: Vec<String>) -> Result<Release, String> {
     if api_urls.is_empty() {

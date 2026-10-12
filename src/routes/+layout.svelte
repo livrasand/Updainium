@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import type { Snippet } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { setDockVisibility } from "@tauri-apps/api/app";
   import { getCurrentWindow } from "@tauri-apps/api/window";
 
   let { children }: { children: Snippet } = $props();
@@ -17,6 +18,7 @@
       .onCloseRequested((event) => {
         if (localStorage.getItem(backgroundKey) === "true") {
           event.preventDefault();
+          void setDockVisibility(false);
           void window.hide();
         }
       })
