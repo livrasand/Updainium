@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createBackup, parseBackup, parseGistId, restoreSources, maxBackupBytes } from "../src/lib/backup.ts";
+import { createBackup, parseBackup, parseGistId, restoreSources, maxBackupBytes, maxBackupSources } from "../src/lib/backup.ts";
 
 function fixture() {
   return {
@@ -46,10 +46,26 @@ test("rejects unsupported, malformed, duplicate, and oversized backups", () => {
     { ...fixture(), sources: [{ ...fixture().sources[0], assetArchitecture: "bad" }] },
     { ...fixture(), sources: [{ ...fixture().sources[0], appIdentifier: 42 }] },
     { ...fixture(), sources: [...fixture().sources, ...fixture().sources] },
+    { ...fixture(), sources: Array.from({ length: maxBackupSources + 1 }, (_, i) => ({
+      id: `app-${i}`, repo: `owner/app-${i}`, url: `https://github.com/owner/app-${i}`,
+    })) },
   ];
   for (const value of invalid) assert.throws(() => parseBackup(JSON.stringify(value)));
   assert.throws(() => parseBackup("{broken"));
   assert.throws(() => parseBackup("x".repeat(maxBackupBytes + 1)), /5 MB/);
+  assert.throws(() => parseBackup(JSON.stringify({
+    ...fixture(),
+    sources: Array.from({ length: maxBackupSources + 1 }, (_, i) => ({
+      id: `app-${i}`, repo: `owner/app-${i}`, url: `https://github.com/owner/app-${i}`,
+    })),
+  })), new RegExp(String(maxBackupSources)));
+  // Boundary: exactly maxBackupSources apps is still accepted.
+  assert.equal(parseBackup(JSON.stringify({
+    ...fixture(),
+    sources: Array.from({ length: maxBackupSources }, (_, i) => ({
+      id: `app-${i}`, repo: `owner/app-${i}`, url: `https://github.com/owner/app-${i}`,
+    })),
+  })).sources.length, maxBackupSources);
 });
 
 test("imported unknown OAuth and token fields never reach restored settings", () => {

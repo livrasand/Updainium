@@ -4,6 +4,7 @@ use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     future::Future,
     sync::{Arc, Mutex},
     time::Duration,
@@ -16,13 +17,70 @@ const FILE_NAME: &str = "updainium-settings.json";
 pub struct GithubState(
     Arc<Mutex<Session>>,
     Arc<dyn CredentialStore>,
-    Arc<Mutex<RequestState>>,
+    RequestRegistry,
 );
 
+/// Abort handles for every in-flight GitHub request, keyed by request ID, so
+/// concurrent operations can be cancelled without overwriting each other.
+#[derive(Clone, Default)]
+struct RequestRegistry(Arc<Mutex<RequestRegistryInner>>);
+
 #[derive(Default)]
-struct RequestState {
+struct RequestRegistryInner {
+    next_id: u64,
+    handles: HashMap<u64, AbortHandle>,
+}
+
+impl RequestRegistry {
+    fn register(&self, abort: AbortHandle) -> Result<u64, String> {
+        let mut inner = self
+            .0
+            .lock()
+            .map_err(|_| "GitHub request state is unavailable.")?;
+        inner.next_id = inner.next_id.wrapping_add(1);
+        let id = inner.next_id;
+        inner.handles.insert(id, abort);
+        Ok(id)
+    }
+
+    fn remove(&self, id: u64) {
+        if let Ok(mut inner) = self.0.lock() {
+            inner.handles.remove(&id);
+        }
+    }
+
+    fn cancel_all(&self) -> Result<(), String> {
+        let aborts: Vec<AbortHandle> = {
+            let inner = self
+                .0
+                .lock()
+                .map_err(|_| "GitHub request state is unavailable.")?;
+            inner.handles.values().cloned().collect()
+        };
+        // Abort outside the lock so task wakeups never deadlock against the registry.
+        for abort in aborts {
+            abort.abort();
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0.lock().unwrap().handles.len()
+    }
+}
+
+/// Removes this request's abort handle when the operation ends, even if the
+/// surrounding task is dropped before the future completes.
+struct RequestGuard {
+    registry: RequestRegistry,
     id: u64,
-    abort: Option<AbortHandle>,
+}
+
+impl Drop for RequestGuard {
+    fn drop(&mut self) {
+        self.registry.remove(self.id);
+    }
 }
 
 async fn github_operation<T>(
@@ -30,24 +88,13 @@ async fn github_operation<T>(
     future: impl Future<Output = Result<T, String>>,
 ) -> Result<T, String> {
     let (abort, registration) = AbortHandle::new_pair();
-    let id = {
-        let mut request = state
-            .2
-            .lock()
-            .map_err(|_| "GitHub request state is unavailable.")?;
-        request.id = request.id.wrapping_add(1);
-        request.abort = Some(abort);
-        request.id
+    let _guard = RequestGuard {
+        id: state.2.register(abort)?,
+        registry: state.2.clone(),
     };
-    let result = Abortable::new(future, registration)
+    Abortable::new(future, registration)
         .await
-        .unwrap_or_else(|_| Err("GitHub request cancelled.".into()));
-    if let Ok(mut request) = state.2.lock() {
-        if request.id == id {
-            request.abort = None;
-        }
-    }
-    result
+        .unwrap_or_else(|_| Err("GitHub request cancelled.".into()))
 }
 
 #[tauri::command]
@@ -56,14 +103,7 @@ pub fn github_cancel_request(state: State<'_, GithubState>) -> Result<(), String
 }
 
 fn cancel_request(state: &GithubState) -> Result<(), String> {
-    let mut request = state
-        .2
-        .lock()
-        .map_err(|_| "GitHub request state is unavailable.")?;
-    if let Some(abort) = request.abort.take() {
-        abort.abort();
-    }
-    request.id = request.id.wrapping_add(1);
+    state.2.cancel_all()?;
     // Invalidate a token connection whose credential-save task has not started.
     // Do not block cancellation on an OS credential-store prompt already in progress.
     if let Ok(mut session) = state.0.try_lock() {
@@ -74,7 +114,11 @@ fn cancel_request(state: &GithubState) -> Result<(), String> {
 
 impl Default for GithubState {
     fn default() -> Self {
-        Self(Arc::default(), Arc::new(SystemCredentials), Arc::default())
+        Self(
+            Arc::default(),
+            Arc::new(SystemCredentials),
+            RequestRegistry::default(),
+        )
     }
 }
 
@@ -168,6 +212,31 @@ fn verify_revision(value: &Value, expected: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Confirms that a completed update is still based on the reviewed revision.
+///
+/// GitHub does not document conditional (If-Match) support for the gist PATCH
+/// endpoint, so a stale write can be applied even when the header is ignored.
+/// The gist history is newest-first, so after our write the reviewed revision
+/// must be the head (a no-op update) or its immediate parent (a normal update).
+/// Anything else means another write landed between our read and our update.
+fn verify_no_interleaving(value: &Value, expected: &str) -> Result<(), String> {
+    let history = match value["history"].as_array() {
+        Some(history) if !history.is_empty() => history,
+        // Responses without history cannot be checked; If-Match guards the write
+        // whenever GitHub honors it, so this is not treated as a conflict.
+        _ => return Ok(()),
+    };
+    if history
+        .iter()
+        .take(2)
+        .filter_map(|entry| entry["version"].as_str())
+        .any(|version| version == expected)
+    {
+        return Ok(());
+    }
+    Err("This backup changed on GitHub while your update was uploading. The upload may have overwritten a newer revision; refresh and review the latest update.".into())
+}
+
 #[tauri::command]
 pub async fn github_backup_info(
     state: State<'_, GithubState>,
@@ -221,16 +290,27 @@ fn client() -> Result<Client, String> {
         .map_err(|_| "Could not initialize GitHub connection.".into())
 }
 
-async fn response_json(response: reqwest::Response) -> Result<Value, String> {
+struct ApiResponse {
+    value: Value,
+    etag: Option<String>,
+}
+
+async fn response_json(response: reqwest::Response) -> Result<ApiResponse, String> {
     let status = response.status();
     if !status.is_success() {
         return Err(match status.as_u16() {
             401 => "GitHub credentials expired or are invalid. Sign in again.".into(),
             403 => "GitHub denied this request. Check gist permissions or try again after the rate limit resets.".into(),
             404 => "GitHub could not find this gist or you do not have access.".into(),
+            412 => "This backup changed on GitHub since you reviewed it. Refresh and review the latest update before uploading.".into(),
             _ => format!("GitHub request failed (HTTP {status})."),
         });
     }
+    let etag = response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let mut response = response;
     let mut bytes = Vec::new();
     while let Some(chunk) = response
@@ -243,7 +323,9 @@ async fn response_json(response: reqwest::Response) -> Result<Value, String> {
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).map_err(|_| "GitHub returned an unreadable response.".into())
+    let value = serde_json::from_slice(&bytes)
+        .map_err(|_| "GitHub returned an unreadable response.".to_owned())?;
+    Ok(ApiResponse { value, etag })
 }
 
 async fn api(
@@ -252,6 +334,18 @@ async fn api(
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, String> {
+    api_conditional(token, method, path, body, None)
+        .await
+        .map(|response| response.value)
+}
+
+async fn api_conditional(
+    token: &str,
+    method: Method,
+    path: &str,
+    body: Option<Value>,
+    if_match: Option<&str>,
+) -> Result<ApiResponse, String> {
     let mut request = client()?
         .request(method, format!("https://api.github.com{path}"))
         .header("Accept", "application/vnd.github+json")
@@ -261,6 +355,9 @@ async fn api(
     }
     if let Some(body) = body {
         request = request.json(&body);
+    }
+    if let Some(if_match) = if_match {
+        request = request.header(reqwest::header::IF_MATCH, if_match);
     }
     response_json(
         request
@@ -282,6 +379,18 @@ fn token(state: &GithubState) -> Result<String, String> {
         .lock()
         .map_err(|_| "GitHub session is unavailable.")?
         .token
+        .clone()
+        .ok_or_else(|| "Sign in to GitHub first.".into())
+}
+
+/// Returns the signed-in login without an extra `/user` round-trip, keeping the
+/// gap between reading a gist and updating it as small as possible.
+fn login(state: &GithubState) -> Result<String, String> {
+    state
+        .0
+        .lock()
+        .map_err(|_| "GitHub session is unavailable.")?
+        .login
         .clone()
         .ok_or_else(|| "Sign in to GitHub first.".into())
 }
@@ -513,18 +622,35 @@ pub async fn github_write_backup(
         let body = gist_write_payload(&content, id.is_none().then_some(is_public));
         let value = if let Some(id) = id {
             gist_id(&id)?;
-            let existing = api(&token, Method::GET, &format!("/gists/{id}"), None).await?;
             let expected = expected_revision
                 .as_deref()
                 .ok_or("Review the latest backup before updating it.")?;
-            verify_revision(&existing, expected)?;
-            if !existing["files"][FILE_NAME].is_object() {
+            let existing =
+                api_conditional(&token, Method::GET, &format!("/gists/{id}"), None, None).await?;
+            verify_revision(&existing.value, expected)?;
+            if !existing.value["files"][FILE_NAME].is_object() {
                 return Err("This gist is not an Updainium backup.".into());
             }
-            if existing["owner"]["login"].as_str() != Some(account(&token).await?.login.as_str()) {
+            if existing.value["owner"]["login"].as_str() != Some(login(&state)?.as_str()) {
                 return Err("You can only update your own backup gists.".into());
             }
-            api(&token, Method::PATCH, &format!("/gists/{id}"), Some(body)).await?
+            // Send the reviewed revision's ETag so GitHub can reject a write that
+            // raced with another client (HTTP 412). GitHub only honors conditional
+            // requests on some endpoints, so re-check the returned history afterwards
+            // to catch a clobber when the header is ignored.
+            let etag = existing
+                .etag
+                .ok_or("GitHub did not return the current backup revision.")?;
+            let updated = api_conditional(
+                &token,
+                Method::PATCH,
+                &format!("/gists/{id}"),
+                Some(body),
+                Some(&etag),
+            )
+            .await?;
+            verify_no_interleaving(&updated.value, expected)?;
+            updated.value
         } else {
             api(&token, Method::POST, "/gists", Some(body)).await?
         };
@@ -553,11 +679,36 @@ mod tests {
     }
 
     #[test]
+    fn interleaving_check_accepts_our_update_and_flags_concurrent_writes() {
+        let base = "a".repeat(40);
+        let ours = "b".repeat(40);
+        let theirs = "c".repeat(40);
+        // Normal update: our new revision sits on top of the reviewed one.
+        let updated = json!({ "history": [{ "version": ours }, { "version": base }] });
+        assert!(verify_no_interleaving(&updated, &base).is_ok());
+        // No-op update: the reviewed revision is still the head.
+        let unchanged = json!({ "history": [{ "version": base }] });
+        assert!(verify_no_interleaving(&unchanged, &base).is_ok());
+        // Another write landed between our read and our update.
+        let clobbered = json!({ "history": [
+            { "version": ours },
+            { "version": theirs },
+            { "version": base }
+        ] });
+        assert!(verify_no_interleaving(&clobbered, &base)
+            .unwrap_err()
+            .contains("while your update was uploading"));
+        // A response without history cannot be verified and is not a conflict.
+        assert!(verify_no_interleaving(&json!({}), &base).is_ok());
+        assert!(verify_no_interleaving(&json!({ "history": [] }), &base).is_ok());
+    }
+
+    #[test]
     fn cancel_stops_pending_request_and_allows_next_request() {
         let state = GithubState(
             Arc::default(),
             Arc::new(TestCredentials::default()),
-            Arc::default(),
+            RequestRegistry::default(),
         );
         tauri::async_runtime::block_on(async {
             let waiting = github_operation(&state, std::future::pending::<Result<(), String>>());
@@ -567,8 +718,32 @@ mod tests {
             let (result, ()) = futures_util::join!(waiting, cancelling);
             assert_eq!(result.unwrap_err(), "GitHub request cancelled.");
             assert_eq!(state.0.lock().unwrap().generation, 1);
-            assert!(state.2.lock().unwrap().abort.is_none());
+            assert_eq!(state.2.len(), 0);
             assert_eq!(github_operation(&state, async { Ok(7) }).await.unwrap(), 7);
+        });
+    }
+
+    #[test]
+    fn concurrent_requests_keep_independent_cancel_handles() {
+        let state = GithubState(
+            Arc::default(),
+            Arc::new(TestCredentials::default()),
+            RequestRegistry::default(),
+        );
+        tauri::async_runtime::block_on(async {
+            let first = github_operation(&state, std::future::pending::<Result<(), String>>());
+            let second = github_operation(&state, std::future::pending::<Result<(), String>>());
+            let inspect = async {
+                // Both requests are registered; finishing one must not clear the other.
+                assert_eq!(state.2.len(), 2);
+                assert_eq!(github_operation(&state, async { Ok(7) }).await.unwrap(), 7);
+                assert_eq!(state.2.len(), 2);
+                cancel_request(&state).unwrap();
+            };
+            let (first, second, ()) = futures_util::join!(first, second, inspect);
+            assert_eq!(first.unwrap_err(), "GitHub request cancelled.");
+            assert_eq!(second.unwrap_err(), "GitHub request cancelled.");
+            assert_eq!(state.2.len(), 0);
         });
     }
 
@@ -603,7 +778,7 @@ mod tests {
     #[test]
     fn sign_in_survives_restart_and_disconnect_removes_saved_credentials() {
         let credentials = Arc::new(TestCredentials::default());
-        let first = GithubState(Arc::default(), credentials.clone(), Arc::default());
+        let first = GithubState(Arc::default(), credentials.clone(), RequestRegistry::default());
         tauri::async_runtime::block_on(store_account(
             &first,
             "test-token".into(),
@@ -614,7 +789,7 @@ mod tests {
         ))
         .unwrap();
         drop(first);
-        let restarted = GithubState(Arc::default(), credentials.clone(), Arc::default());
+        let restarted = GithubState(Arc::default(), credentials.clone(), RequestRegistry::default());
         assert_eq!(
             restore_saved_session(&restarted).unwrap().unwrap().login,
             "alice"
@@ -622,14 +797,14 @@ mod tests {
         assert_eq!(token(&restarted).unwrap(), "test-token");
         disconnect_session(&restarted).unwrap();
         assert!(token(&restarted).is_err());
-        let after_disconnect = GithubState(Arc::default(), credentials, Arc::default());
+        let after_disconnect = GithubState(Arc::default(), credentials, RequestRegistry::default());
         assert!(restore_saved_session(&after_disconnect).unwrap().is_none());
     }
 
     #[test]
     fn cancelled_sign_in_cannot_save_credentials() {
         let credentials = Arc::new(TestCredentials::default());
-        let state = GithubState(Arc::default(), credentials.clone(), Arc::default());
+        let state = GithubState(Arc::default(), credentials.clone(), RequestRegistry::default());
         state.0.lock().unwrap().generation = 1;
         assert!(tauri::async_runtime::block_on(store_account(
             &state,

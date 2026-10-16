@@ -2,6 +2,7 @@ export const sourcesKey = "updainium.sources.v1";
 export const backgroundKey = "updainium.background.v1";
 export const backupFileName = "updainium-settings.json";
 export const maxBackupBytes = 5 * 1024 * 1024;
+export const maxBackupSources = 1000;
 
 export function parseGistId(input: string): string {
   let id = input.trim();
@@ -45,6 +46,9 @@ export function parseBackup(text: string): Backup {
       typeof value.exportedAt !== "string" || !record(value.settings) ||
       typeof value.settings.backgroundEnabled !== "boolean" || typeof value.settings.startOnLogin !== "boolean" ||
       !Array.isArray(value.sources)) throw new Error("This is not a supported Updainium backup (version 1).");
+  if (value.sources.length > maxBackupSources) {
+    throw new Error(`The backup contains more than ${maxBackupSources} apps.`);
+  }
   const ids = new Set<string>();
   const urls = new Set<string>();
   const sources = value.sources.map((source: unknown): BackupSource => {

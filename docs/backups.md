@@ -40,8 +40,9 @@ With a main backup selected, **Update backup** becomes the primary action. Updat
 reuse the same gist, preserve its visibility, and retain older revisions in GitHub's
 history. Before confirmation, the app fetches the latest update time. Before
 uploading, it checks that the revision has not changed since that review; a newer
-revision asks you to refresh and review again. This checks for changes before the
-upload, but does not lock the remote gist against simultaneous writes.
+revision asks you to refresh and review again. The update is sent with the reviewed
+revision's `If-Match` ETag and the returned history is re-checked, so a simultaneous
+write from another device is reported instead of silently overwritten.
 
 **Restore backup** loads revision history. Choose **Latest version** or a dated
 older revision and click **Preview restore**. The existing import preview lets you

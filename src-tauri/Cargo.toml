@@ -1,6 +1,6 @@
 [package]
 name = "updaitium"
-version = "1.0.2"
+version = "1.1.0"
 description = "Get desktop app updates straight from the source"
 authors = ["livrasand"]
 edition = "2021"
