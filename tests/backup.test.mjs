@@ -14,7 +14,7 @@ test("shared gist imports accept IDs and GitHub URLs but reject other hosts and 
   assert.equal(parseGistId(" abc123 "), "abc123");
   assert.equal(parseGistId("https://gist.github.com/alice/abc123#file-updainium-settings-json"), "abc123");
   assert.equal(parseGistId("https://gist.github.com/abc123"), "abc123");
-  for (const input of ["https://evil.com/alice/abc123", "https://token@gist.github.com/alice/abc123", "../abc", "not-an-id", "https://gist.github.com/"]) {
+  for (const input of ["https://livrasand.com/alice/abc123", "https://token@gist.github.com/alice/abc123", "../abc", "not-an-id", "https://gist.github.com/"]) {
     assert.throws(() => parseGistId(input));
   }
 });
