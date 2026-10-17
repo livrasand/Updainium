@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
+  import { fly } from "svelte/transition";
   import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -80,6 +81,9 @@
   let downloading = $state<string | null>(null);
   let installedVersions = $state<Record<string, string | null | undefined>>({});
   let installedCheckErrors = $state<string[]>([]);
+  let snackbarMessage = $state("");
+  let snackbarOpen = $state(false);
+  let snackbarTimer: ReturnType<typeof setTimeout> | undefined;
 
   const visibleSources = $derived(
     sources.filter((source) => source.repo.toLowerCase().includes(filter.trim().toLowerCase())),
@@ -495,7 +499,29 @@
       ...sources.map((source) => checkSource(source.id)),
       ...sources.map((source) => checkInstalled(source)),
     ]);
+    const updatesAvailable = sources.some((source) => hasUpdate(source));
+    showSnackbar(updatesAvailable ? "Updates available" : "All your apps are up to date");
   }
+
+  function showSnackbar(message: string, timeout = 5000): void {
+    snackbarMessage = message;
+    snackbarOpen = true;
+    if (snackbarTimer) clearTimeout(snackbarTimer);
+    snackbarTimer = setTimeout(() => {
+      snackbarOpen = false;
+      snackbarTimer = undefined;
+    }, timeout);
+  }
+
+  function hideSnackbar(): void {
+    if (snackbarTimer) clearTimeout(snackbarTimer);
+    snackbarTimer = undefined;
+    snackbarOpen = false;
+  }
+
+  onDestroy(() => {
+    if (snackbarTimer) clearTimeout(snackbarTimer);
+  });
 
   async function refreshSource(source: TrackedSource): Promise<void> {
     await Promise.all([checkSource(source.id), checkInstalled(source)]);
@@ -724,7 +750,7 @@
         <section class="add-section" aria-labelledby="add-title">
           <div class="add-heading">
             <button class="back-button" type="button" aria-label="Back to apps" onclick={() => { showAddSection = false; editingSourceId = null; }}>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h11"></path></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M640-80 240-480l400-400 71 71-329 329 329 329-71 71Z"/></svg>
             </button>
             <h1 id="add-title">{editingSourceId ? "Edit app" : "Add an app"}</h1>
           </div>
@@ -733,8 +759,8 @@
             <label class="add-field">
               <span class="visually-hidden">Repository URL</span>
               <input bind:value={sourceUrl} placeholder="Source URL of the application" type="url" required />
-              <span class="field-symbol" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+              <span class="field-symbol field-symbol-filled" aria-hidden="true">
+                <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="M440-440H200v-80h240v-240h80v240h240v80H520v240h-80v-240Z"/></svg>
               </span>
             </label>
             <div class:app-file-drag-over={appFileDragOver} class="identifier-field-row">
@@ -794,7 +820,7 @@
         <section class="app-detail" aria-labelledby="detail-title">
           <div class="detail-identity">
             <button class="back-button" type="button" aria-label="Back to apps" onclick={() => (selectedSourceId = null)}>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h11"></path></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M640-80 240-480l400-400 71 71-329 329 329 329-71 71Z"/></svg>
             </button>
             <div class="detail-avatar" aria-hidden="true">
               {selectedSource.repo.split("/").at(-1)?.slice(0, 1).toUpperCase() ?? "A"}
@@ -875,7 +901,7 @@
                 {#if downloading === selectedSource.id}
                   <span class="button-spinner"></span>Downloading…
                 {:else}
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 18v3h14v-3"></path></svg>
+                  <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></svg>
                   Download release asset
                 {/if}
               </Button>
@@ -884,13 +910,13 @@
 
           <div class="detail-actions">
             <button class="detail-icon-button" type="button" aria-label={`Edit ${selectedSource.repo}`} title="Edit app" onclick={() => editSource(selectedSource)} disabled={checking.includes(selectedSource.id) || downloading === selectedSource.id}>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5 5 5M4 20l4.5-.9L19 8.6a2.1 2.1 0 0 0-3-3L5.5 16.1 4 20Z"></path></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" class="detail-icon-filled" aria-hidden="true"><path d="M200-200h57l391-391-57-57-391 391v57Zm-80 80v-170l528-527q12-11 26.5-17t30.5-6q16 0 31 6t26 18l55 56q12 11 17.5 26t5.5 30q0 16-5.5 30.5T817-647L290-120H120Zm640-584-56-56 56 56Zm-141 85-28-29 57 57-29-28Z"/></svg>
             </button>
             <button class="detail-icon-button" type="button" aria-label="Check release again" title="Check release again" onclick={() => refreshSource(selectedSource)} disabled={checking.includes(selectedSource.id)}>
-              <svg class:spinning={checking.includes(selectedSource.id)} viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"></path><path d="M5.6 9a7 7 0 0 1 11.7-2L20 12M4 12l2.7 5a7 7 0 0 0 11.7-2"></path></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" class="detail-icon-filled" class:spinning={checking.includes(selectedSource.id)} aria-hidden="true"><path d="M204-318q-22-38-33-78t-11-82q0-134 93-228t227-94h7l-64-64 56-56 160 160-160 160-56-56 64-64h-7q-100 0-170 70.5T240-478q0 26 6 51t18 49l-60 60ZM481-40 321-200l160-160 56 56-64 64h7q100 0 170-70.5T720-482q0-26-6-51t-18-49l60-60q22 38 33 78t11 82q0 134-93 228t-227 94h-7l64 64-56 56Z"/></svg>
             </button>
             <button class="detail-icon-button" type="button" aria-label={`Remove ${selectedSource.repo}`} title="Remove app" onclick={() => { if (removeSource(selectedSource)) selectedSourceId = null; }}>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3"></path></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" class="detail-icon-filled" aria-hidden="true"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>
             </button>
             <button
               class="detail-install-button"
@@ -912,22 +938,18 @@
             class="icon-button refresh-button"
             variant="text"
             type="button"
+            aria-label="Check for updates"
+            title="Check for updates"
             onclick={refreshAll}
             disabled={!sources.length || checking.length > 0}
           >
-            <svg class:spinning={checking.length > 0} viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M20 7v5h-5M4 17v-5h5"></path>
-              <path d="M5.6 9a7 7 0 0 1 11.7-2L20 12M4 12l2.7 5a7 7 0 0 0 11.7-2"></path>
-            </svg>
-            <span>Check for updates</span>
+            <svg class:spinning={checking.length > 0} xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M204-318q-22-38-33-78t-11-82q0-134 93-228t227-94h7l-64-64 56-56 160 160-160 160-56-56 64-64h-7q-100 0-170 70.5T240-478q0 26 6 51t18 49l-60 60ZM481-40 321-200l160-160 56 56-64 64h7q100 0 170-70.5T720-482q0-26-6-51t-18-49l60-60q22 38 33 78t11 82q0 134-93 228t-227 94h-7l64 64-56 56Z"/></svg>
           </Button>
           <a class="settings-button" href="/settings" aria-label="Settings" title="Settings">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M19.14 12.94a7.49 7.49 0 0 0 .05-1.88l2.03-1.58-2-3.46-2.4.97a7.28 7.28 0 0 0-1.63-.95L14.82 3h-4l-.37 3.04a7.28 7.28 0 0 0-1.63.95l-2.4-.97-2 3.46 2.03 1.58a7.49 7.49 0 0 0 0 1.88l-2.03 1.58 2 3.46 2.4-.97a7.28 7.28 0 0 0 1.63.95L10.82 21h4l.37-3.04a7.28 7.28 0 0 0 1.63-.95l2.4.97 2-3.46-2.08-1.58ZM12.82 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"></path>
-            </svg>
+            <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="m370-80-16-128q-13-5-24.5-12T307-235l-119 50L78-375l103-78q-1-7-1-13.5v-27q0-6.5 1-13.5L78-585l110-190 119 50q11-8 23-15t24-12l16-128h220l16 128q13 5 24.5 12t22.5 15l119-50 110 190-103 78q1 7 1 13.5v27q0 6.5-2 13.5l103 78-110 190-118-50q-11 8-23 15t-24 12L590-80H370Zm70-80h79l14-106q31-8 57.5-23.5T639-327l99 41 39-68-86-65q5-14 7-29.5t2-31.5q0-16-2-31.5t-7-29.5l86-65-39-68-99 42q-22-23-48.5-38.5T533-694l-13-106h-79l-14 106q-31 8-57.5 23.5T321-633l-99-41-39 68 86 64q-5 15-7 30t-2 32q0 16 2 31t7 30l-86 65 39 68 99-42q22 23 48.5 38.5T427-266l13 106Zm42-180q58 0 99-41t41-99q0-58-41-99t-99-41q-59 0-99.5 41T342-480q0 58 40.5 99t99.5 41Zm-2-140Z"/></svg>
           </a>
           <Button class="primary-button add-button" variant="unelevated" type="button" onclick={() => { editingSourceId = null; sourceAppIdentifier = ""; showAddSection = true; }}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M440-440H200v-80h240v-240h80v240h240v80H520v240h-80v-240Z"/></svg>
             Add
           </Button>
         </div>
@@ -960,6 +982,12 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
           <input bind:value={filter} placeholder="Search" aria-label="Search apps" />
         </label>
+        {#if checking.length > 0}
+          <span class="linear-progress" role="progressbar" aria-label="Checking for updates">
+            <span class="linear-progress-bar primary"><span></span></span>
+            <span class="linear-progress-bar secondary"><span></span></span>
+          </span>
+        {/if}
       </div>
 
       {#if !sources.length}
@@ -1001,6 +1029,18 @@
       {/if}
     </section>
   </main>
+
+  {#if snackbarOpen}
+    <div
+      class="snackbar"
+      role="status"
+      aria-live="polite"
+      transition:fly={{ y: 16, duration: 200 }}
+    >
+      <span class="snackbar-label">{snackbarMessage}</span>
+      <button class="snackbar-action" type="button" onclick={hideSnackbar}>Dismiss</button>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -1057,6 +1097,11 @@
   .notice { position: relative; margin: 0 0 20px; padding: 12px 40px 12px 14px; border-radius: 8px; line-height: 1.5; }
   .error-notice { border: 1px solid #f2d5d5; background: #fff5f4; color: #a03e3a; }
   .notice button { position: absolute; top: 4px; right: 10px; border: 0; background: none; color: inherit; font-size: 21px; cursor: pointer; }
+  .snackbar { position: fixed; right: 0; bottom: 24px; left: 0; z-index: 60; display: flex; width: fit-content; max-width: min(560px, calc(100vw - 40px)); min-height: 48px; align-items: center; gap: 8px; margin: 0 auto; padding: 12px 10px 12px 18px; border-radius: 10px; background: #2f2b36; box-shadow: 0 8px 24px rgb(24 19 32 / 28%); color: #f4f1f8; font-size: 13px; line-height: 1.45; }
+  .snackbar-label { min-width: 0; }
+  .snackbar-action { flex: 0 0 auto; padding: 8px 14px; border: 0; border-radius: 7px; background: transparent; color: #d2b7ff; font-size: 12px; font-weight: 650; cursor: pointer; transition: background .15s ease; }
+  .snackbar-action:hover { background: rgb(255 255 255 / 10%); }
+  .snackbar-action:focus-visible { outline: 2px solid #d2b7ff; outline-offset: 2px; }
   .page-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
   .heading-actions { display: flex; align-items: center; gap: 8px; }
   .settings-button { display: grid; width: 40px; height: 40px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--accent); transition: color .16s ease; }
@@ -1081,10 +1126,51 @@
   .summary-label { color: #898894; font-size: 11px; }
   .summary-card strong { overflow: hidden; color: #33323e; font-size: 17px; font-weight: 690; letter-spacing: -.35px; text-overflow: ellipsis; white-space: nowrap; }
   .platform-summary strong { font-size: 12px; }
-  .list-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 38px 0 13px; }
+  .list-heading { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 38px 0 13px; }
   .list-heading > div { display: flex; align-items: baseline; gap: 10px; }
   h2 { margin: 0; color: #302f3b; font-size: 15px; font-weight: 690; letter-spacing: -.2px; }
   .list-count { color: #a09faa; font-size: 11px; }
+  /* Material linear progress indicator (indeterminate) shown while a check for updates is running. */
+  .linear-progress {
+    position: absolute;
+    right: 0;
+    bottom: -9px;
+    left: 0;
+    height: 4px;
+    overflow: hidden;
+    border-radius: 4px;
+    background: var(--surface-muted);
+  }
+  .linear-progress-bar { position: absolute; top: 0; width: 100%; height: 100%; transform-origin: top left; }
+  .linear-progress-bar > span { display: block; width: 100%; height: 100%; border-radius: 4px; background: var(--accent, #705394); }
+  .linear-progress-bar.primary { left: -145.166611%; animation: linear-progress-primary-translate 2s infinite linear; }
+  .linear-progress-bar.primary > span { animation: linear-progress-primary-scale 2s infinite linear; }
+  .linear-progress-bar.secondary { left: -54.888891%; animation: linear-progress-secondary-translate 2s infinite linear; }
+  .linear-progress-bar.secondary > span { animation: linear-progress-secondary-scale 2s infinite linear; }
+  @keyframes linear-progress-primary-translate {
+    0% { transform: translateX(0); }
+    20% { animation-timing-function: cubic-bezier(.5, 0, .701732, .495819); transform: translateX(0); }
+    59.15% { animation-timing-function: cubic-bezier(.302435, .381352, .55, .956352); transform: translateX(83.67142%); }
+    100% { transform: translateX(200.611057%); }
+  }
+  @keyframes linear-progress-primary-scale {
+    0% { transform: scaleX(.08); }
+    36.65% { animation-timing-function: cubic-bezier(.334731, .12482, .785844, 1); transform: scaleX(.08); }
+    69.15% { animation-timing-function: cubic-bezier(.06, .11, .6, 1); transform: scaleX(.661479); }
+    100% { transform: scaleX(.08); }
+  }
+  @keyframes linear-progress-secondary-translate {
+    0% { animation-timing-function: cubic-bezier(.15, 0, .515058, .409685); transform: translateX(0); }
+    25% { animation-timing-function: cubic-bezier(.31033, .284058, .8, .733712); transform: translateX(37.651913%); }
+    48.35% { animation-timing-function: cubic-bezier(.4, .627035, .6, .902026); transform: translateX(84.386165%); }
+    100% { transform: translateX(160.277782%); }
+  }
+  @keyframes linear-progress-secondary-scale {
+    0% { animation-timing-function: cubic-bezier(.205028, .057051, .57661, .453971); transform: scaleX(.08); }
+    19.15% { animation-timing-function: cubic-bezier(.152313, .196432, .648374, 1.004315); transform: scaleX(.457104); }
+    44.15% { animation-timing-function: cubic-bezier(.257759, -.003163, .211762, 1.38179); transform: scaleX(.72796); }
+    100% { transform: scaleX(.08); }
+  }
   .search-box { display: flex; width: 232px; height: 34px; align-items: center; gap: 8px; padding: 0 9px; border: 1px solid #e9e8ef; border-radius: 6px; background: #fff; color: #a1a0ad; }
   .search-box svg { width: 15px; height: 15px; flex: 0 0 auto; }
   .search-box input { width: 100%; min-width: 0; border: 0; outline: none; background: transparent; color: #454451; font-size: 11px; }
@@ -1111,12 +1197,12 @@
   :global(.icon-button:hover) { border-color: #e9e7f1; background: #f8f7fb; color: #6650d1; }
   :global(.icon-button:disabled) { opacity: .45; cursor: wait; }
   :global(.icon-button svg) { width: 16px; height: 16px; }
-  :global(.refresh-button svg) { width: 17px; height: 17px; }
+  :global(.refresh-button svg) { width: 21px; height: 21px; fill: currentColor; stroke: none; }
   .spinning { animation: spin .8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .button-spinner { width: 12px; height: 12px; border: 2px solid rgb(255 255 255 / 40%); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
-  :global(.icon-button.refresh-button) { display: flex; width: auto; min-width: 0; height: 34px; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--border, #e9e0ec); border-radius: 18px; color: var(--muted, #56515d); font-size: 12px; white-space: nowrap; }
-  :global(.icon-button.refresh-button:hover) { border-color: var(--border, #e9e0ec); background: var(--surface-muted, #eee7f0); color: var(--text, #24212a); }
+  :global(.icon-button.refresh-button) { display: flex; width: 40px; height: 40px; min-width: 0; align-items: center; justify-content: center; gap: 0; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--accent); font-size: 12px; white-space: nowrap; transition: color .16s ease; }
+  :global(.icon-button.refresh-button:hover) { background: transparent; color: var(--accent-strong, var(--accent)); }
   :global(.icon-button.refresh-button:disabled) { opacity: .55; }
   .empty-state { display: flex; min-height: 358px; flex-direction: column; align-items: center; justify-content: center; padding: 35px; border: 1px dashed #e5e3ed; border-radius: 10px; background: #fff; text-align: center; }
   .empty-state > p { max-width: 410px; margin: 9px 0 19px; color: #8c8a97; font-size: 12px; line-height: 1.65; }
@@ -1127,7 +1213,7 @@
   .back-button { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--text, #24212a); cursor: pointer; transition: background .16s ease, transform .16s ease; }
   .back-button:hover { background: var(--surface-muted, #eee7f0); }
   .back-button:active { transform: translateX(-2px); }
-  .back-button svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .back-button svg { width: 23px; height: 23px; fill: currentColor; stroke: none; }
   .add-intro { margin: 10px 0 26px 53px; color: var(--muted, #56515d); font-size: 14px; }
   .add-form { display: grid; gap: 14px; }
   .identifier-field-row { display: flex; align-items: center; gap: 12px; }
@@ -1142,6 +1228,7 @@
   .add-field select { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text, #24212a); font-size: 17px; }
   .field-symbol { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; color: var(--muted, #56515d); opacity: .8; }
   .field-symbol svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .field-symbol-filled svg { fill: currentColor; stroke: none; }
   .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
   .form-error { margin: 8px 0 0; color: #b84b48; font-size: 11px; }
   .add-hint { margin: 2px 6px; color: var(--muted, #56515d); font-size: 12px; line-height: 1.55; }
@@ -1180,7 +1267,7 @@
   .detail-extension strong { display: block; margin-top: 4px; color: var(--text, #24212a); font-weight: 450; overflow-wrap: anywhere; }
   :global(.detail-download) { display: flex; width: calc(100% + 48px); min-height: 58px; margin: 19px -24px 0; align-items: center; justify-content: center; gap: 10px; border: 0; border-top: 1px solid color-mix(in srgb, var(--border, #e9e0ec) 60%, transparent); border-radius: 0; background: color-mix(in srgb, var(--surface) 72%, var(--surface-raised)); color: var(--accent-strong, #60427f); font-size: 15px; transition: background .16s ease; }
   :global(.detail-download:hover) { background: var(--surface-muted, #eee7f0); }
-  :global(.detail-download svg) { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  :global(.detail-download svg) { width: 19px; height: 19px; fill: currentColor; stroke: none; }
   :global(.detail-download:disabled) { opacity: .65; cursor: wait; }
   .detail-actions { display: flex; gap: 10px; margin-top: 18px; padding: 20px 22px; border-radius: 22px; background: var(--surface, #f7f0f8); }
   .detail-install-button { min-width: 104px; margin-left: auto; padding: 0 22px; border: 0; border-radius: 22px; background: #e9dcff; color: #4e3973; font-size: 15px; cursor: pointer; }
@@ -1191,10 +1278,15 @@
   .detail-icon-button:active { transform: scale(.96); }
   .detail-icon-button:disabled { opacity: .5; cursor: wait; }
   .detail-icon-button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .detail-icon-button svg.detail-icon-filled { fill: currentColor; stroke: none; }
   @keyframes section-enter { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
   @media (prefers-reduced-motion: reduce) {
     .add-section, .app-detail { animation: none; }
     .back-button, .add-field, .back-link, .detail-icon-button, :global(.detail-download) { transition: none; }
+    .linear-progress-bar, .linear-progress-bar > span { animation: none; }
+    .linear-progress-bar.primary { left: 0; }
+    .linear-progress-bar.primary > span { transform: none; }
+    .linear-progress-bar.secondary { display: none; }
   }
   @media (max-width: 1020px) {
     .sidebar { width: 210px; }
@@ -1466,7 +1558,7 @@
     font-weight: 400;
   }
   :global(.primary-button.add-button:hover) { background: #dfcefb; }
-  :global(.primary-button.add-button svg) { width: 25px; height: 25px; }
+  :global(.primary-button.add-button svg) { width: 25px; height: 25px; fill: currentColor; stroke: none; }
   .empty-state { min-height: 150px; justify-content: center; border: 0; border-radius: 24px; background: var(--surface); }
   .empty-state > p { margin: 0; color: var(--muted); font-size: 15px; }
   .empty-filter { border: 0; border-radius: 24px; background: var(--surface); color: var(--muted); }

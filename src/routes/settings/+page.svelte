@@ -344,7 +344,7 @@
   <section class="content">
       <div class="page-heading">
       <a class="back-button" href="/" aria-label="Back to apps" title="Back to apps">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h11"></path></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M640-80 240-480l400-400 71 71-329 329 329 329-71 71Z"/></svg>
       </a>
       <div>
         <h1>Settings</h1>
@@ -568,7 +568,7 @@
   .back-button { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border-radius: 50%; color: var(--text); text-decoration: none; transition: background .16s ease, transform .16s ease; }
   .back-button:hover { background: var(--surface-muted); }
   .back-button:active { transform: translateX(-2px); }
-  .back-button svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .back-button svg { width: 23px; height: 23px; fill: currentColor; stroke: none; }
   h1 { margin: 0; color: var(--text); font-size: 36px; font-weight: 500; letter-spacing: -.8px; }
   .page-heading p { margin: 9px 0 0; color: var(--muted); font-size: 14px; }
   .settings-group { max-width: 760px; overflow: hidden; border: 1px solid transparent; border-radius: 24px; background: var(--surface); }
