@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager,
+    Emitter, Manager,
 };
 use tauri_plugin_autostart::MacosLauncher;
 #[cfg(not(target_os = "macos"))]
@@ -39,6 +39,36 @@ struct DownloadedAsset {
     path: String,
     sha256: String,
     verified: bool,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DownloadProgress {
+    download_id: String,
+    phase: &'static str,
+    received: u64,
+    total: Option<u64>,
+}
+
+/// Reports download progress to the frontend without flooding the webview:
+/// events are throttled, and `total` stays `None` when the server does not
+/// publish a content length, so the UI can show an indeterminate indicator.
+fn emit_download_progress(
+    app: &tauri::AppHandle,
+    download_id: &str,
+    phase: &'static str,
+    received: u64,
+    total: Option<u64>,
+) {
+    let _ = app.emit(
+        "download-progress",
+        DownloadProgress {
+            download_id: download_id.to_owned(),
+            phase,
+            received,
+            total,
+        },
+    );
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -832,6 +862,7 @@ async fn download_release_asset(
     url: String,
     file_name: String,
     expected_sha256: Option<String>,
+    download_id: String,
 ) -> Result<DownloadedAsset, String> {
     let parsed_url = parse_https_url(&url, "The download must come from an HTTPS source.")?;
     let expected_sha256 = expected_sha256
@@ -880,11 +911,22 @@ async fn download_release_asset(
     let temporary = destination.with_extension("download");
     let mut file = fs::File::create(&temporary).map_err(|error| error.to_string())?;
     let mut hasher = Sha256::new();
+    let total = response.content_length();
+    let mut received: u64 = 0;
+    let mut last_emit = std::time::Instant::now();
+    emit_download_progress(&app, &download_id, "downloading", received, total);
     while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
         hasher.update(&chunk);
         file.write_all(&chunk).map_err(|error| error.to_string())?;
+        received += chunk.len() as u64;
+        if last_emit.elapsed() >= std::time::Duration::from_millis(100) {
+            emit_download_progress(&app, &download_id, "downloading", received, total);
+            last_emit = std::time::Instant::now();
+        }
     }
+    emit_download_progress(&app, &download_id, "downloading", received, total);
     file.sync_all().map_err(|error| error.to_string())?;
+    emit_download_progress(&app, &download_id, "verifying", received, total);
     let sha256 = format!("{:x}", hasher.finalize());
     if let Some(expected_sha256) = expected_sha256.as_deref() {
         if sha256 != expected_sha256 {

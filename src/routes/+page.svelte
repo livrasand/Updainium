@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from "svelte";
   import { fly } from "svelte/transition";
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
   import { openPath } from "@tauri-apps/plugin-opener";
@@ -18,6 +19,13 @@
     assets: ReleaseAsset[];
   };
   type SourceReference = { repo: string; url: string; repositoryPath: string; provider: string };
+  type DownloadPhase = "downloading" | "verifying" | "opening";
+  type DownloadProgressEvent = {
+    downloadId: string;
+    phase: DownloadPhase;
+    received: number;
+    total: number | null;
+  };
   type TrackedSource = {
     id: string;
     repo: string;
@@ -79,6 +87,7 @@
   let appFileDragOver = $state(false);
   let checking = $state<string[]>([]);
   let downloading = $state<string | null>(null);
+  let downloadProgress = $state<DownloadProgressEvent | null>(null);
   let installedVersions = $state<Record<string, string | null | undefined>>({});
   let installedCheckErrors = $state<string[]>([]);
   let snackbarMessage = $state("");
@@ -94,6 +103,38 @@
       ? `${platform.os === "macos" ? "macOS" : platform.os} · ${platform.arch}`
       : "Detecting system",
   );
+  // Percentage only when the server published a content length; anything else
+  // gets an indeterminate bar instead of a made-up number.
+  const downloadPercent = $derived.by(() => {
+    if (!downloadProgress) return null;
+    if (downloadProgress.phase !== "downloading") return 100;
+    if (downloadProgress.total && downloadProgress.total > 0) {
+      return Math.min(100, Math.round((downloadProgress.received / downloadProgress.total) * 100));
+    }
+    return null;
+  });
+  const downloadStatusLabel = $derived(
+    downloadProgress?.phase === "verifying"
+      ? "Verifying the SHA-256 checksum…"
+      : downloadProgress?.phase === "opening"
+        ? "Opening the installer…"
+        : downloadPercent !== null
+          ? "Downloading"
+          : "Downloading…",
+  );
+  const downloadDetailLabel = $derived.by(() => {
+    if (!downloadProgress) return "";
+    if (downloadProgress.phase === "verifying") {
+      return "The download finished; checking the file against the published checksum.";
+    }
+    if (downloadProgress.phase === "opening") {
+      return "The installer is ready and will now be opened.";
+    }
+    const received = formatBytes(downloadProgress.received);
+    return downloadProgress.total && downloadProgress.total > 0
+      ? `${received} of ${formatBytes(downloadProgress.total)}`
+      : `${received} downloaded · total size unknown`;
+  });
 
   onMount(async () => {
     try {
@@ -185,6 +226,13 @@
 
   function messageOf(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  function formatBytes(value: number): string {
+    if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+    if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+    if (value >= 1024) return `${(value / 1024).toFixed(1)} kB`;
+    return `${value} B`;
   }
 
   function repositoryFromUrl(input: string): SourceReference {
@@ -586,7 +634,9 @@
   }
 
   function installActionLabel(source: TrackedSource): string {
-    if (downloading === source.id) return "Downloading…";
+    if (downloading === source.id) {
+      return downloadPercent !== null ? `Downloading ${downloadPercent}%` : "Downloading…";
+    }
     if (installedCheckErrors.includes(source.id)) {
       if (hasUpdate(source)) return "Update";
       return installedVersionForComparison(source) ? "Up to date" : "Install";
@@ -625,6 +675,8 @@
   async function downloadAndOpen(source: TrackedSource): Promise<void> {
     if (!source.assetUrl || downloading) return;
     downloading = source.id;
+    downloadProgress = { downloadId: source.id, phase: "downloading", received: 0, total: null };
+    let unlistenProgress: (() => void) | undefined;
     sources = sources.map((item) =>
       item.id === source.id
         ? {
@@ -637,11 +689,21 @@
         : item,
     );
     try {
+      unlistenProgress = await listen<DownloadProgressEvent>("download-progress", (event) => {
+        if (event.payload.downloadId === source.id) downloadProgress = event.payload;
+      });
       const downloaded = await invoke<{ path: string; sha256: string; verified: boolean }>("download_release_asset", {
         url: source.assetUrl,
         fileName: source.assetName,
         expectedSha256: source.sha256 ?? null,
+        downloadId: source.id,
       });
+      downloadProgress = {
+        downloadId: source.id,
+        phase: "opening",
+        received: downloadProgress?.received ?? 0,
+        total: downloadProgress?.total ?? null,
+      };
       sources = sources.map((item) =>
         item.id === source.id
           ? {
@@ -670,6 +732,8 @@
         item.id === source.id ? { ...item, error: detail } : item,
       );
     } finally {
+      unlistenProgress?.();
+      downloadProgress = null;
       downloading = null;
     }
   }
@@ -897,9 +961,37 @@
               <div class="detail-extension">Architecture <strong>{architectures.find((architecture) => architecture.value === (selectedSource.assetArchitecture ?? "auto"))?.label ?? "Automatic (this device)"}</strong></div>
             {/if}
             {#if selectedSource.assetUrl}
+              {#if downloading === selectedSource.id}
+                <div class="operation-progress">
+                  <div class="operation-progress-row">
+                    <span class="operation-progress-label" role="status" aria-live="polite">{downloadStatusLabel}</span>
+                    {#if downloadPercent !== null}
+                      <span class="operation-progress-percent">{downloadPercent}%</span>
+                    {/if}
+                  </div>
+                  <div
+                    class="operation-progress-track"
+                    role="progressbar"
+                    aria-label={downloadStatusLabel}
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow={downloadPercent ?? undefined}
+                  >
+                    {#if downloadPercent !== null}
+                      <span class="operation-progress-fill" style={`width: ${downloadPercent}%`}></span>
+                    {:else}
+                      <span class="linear-progress-bar primary"><span></span></span>
+                      <span class="linear-progress-bar secondary"><span></span></span>
+                    {/if}
+                  </div>
+                  {#if downloadDetailLabel}
+                    <div class="operation-progress-detail">{downloadDetailLabel}</div>
+                  {/if}
+                </div>
+              {/if}
               <Button class="detail-download" variant="text" type="button" onclick={() => downloadAndOpen(selectedSource)} disabled={downloading !== null}>
                 {#if downloading === selectedSource.id}
-                  <span class="button-spinner"></span>Downloading…
+                  <span class="button-spinner"></span>{downloadStatusLabel}
                 {:else}
                   <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></svg>
                   Download release asset
@@ -1171,6 +1263,15 @@
     44.15% { animation-timing-function: cubic-bezier(.257759, -.003163, .211762, 1.38179); transform: scaleX(.72796); }
     100% { transform: scaleX(.08); }
   }
+  /* Download/install/update progress in the source card; determinate when the
+     server publishes a total size, indeterminate otherwise. */
+  .operation-progress { display: grid; gap: 7px; margin-top: 14px; }
+  .operation-progress-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .operation-progress-label { color: var(--text, #24212a); font-size: 13px; font-weight: 560; }
+  .operation-progress-percent { color: var(--accent-strong, #60427f); font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .operation-progress-track { position: relative; height: 6px; overflow: hidden; border-radius: 4px; background: var(--surface-muted, #eee7f0); }
+  .operation-progress-fill { display: block; height: 100%; border-radius: inherit; background: var(--accent, #705394); transition: width .18s ease; }
+  .operation-progress-detail { color: var(--muted, #56515d); font-size: 12px; }
   .search-box { display: flex; width: 232px; height: 34px; align-items: center; gap: 8px; padding: 0 9px; border: 1px solid #e9e8ef; border-radius: 6px; background: #fff; color: #a1a0ad; }
   .search-box svg { width: 15px; height: 15px; flex: 0 0 auto; }
   .search-box input { width: 100%; min-width: 0; border: 0; outline: none; background: transparent; color: #454451; font-size: 11px; }
@@ -1283,6 +1384,7 @@
   @media (prefers-reduced-motion: reduce) {
     .add-section, .app-detail { animation: none; }
     .back-button, .add-field, .back-link, .detail-icon-button, :global(.detail-download) { transition: none; }
+    .operation-progress-fill { transition: none; }
     .linear-progress-bar, .linear-progress-bar > span { animation: none; }
     .linear-progress-bar.primary { left: 0; }
     .linear-progress-bar.primary > span { transform: none; }
