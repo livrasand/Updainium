@@ -14,9 +14,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Build the Linux bundles on the oldest supported runner so the
-          # binaries only require glibc <= 2.35 and the AppImage starts on
-          # older distributions (issue #17: GLIBC_2.38/2.39 not found).
           - os: ubuntu-22.04
             bundles: deb,rpm,appimage
           - os: windows-latest
@@ -40,9 +37,6 @@ jobs:
       - name: Verify Linux glibc baseline
         if: runner.os == 'Linux'
         run: |
-          # The AppImage/deb/rpm must stay loadable on distros older than the
-          # build image. Fail the build if the binary references glibc symbols
-          # newer than the ones shipped with Ubuntu 22.04 (GLIBC_2.35).
           highest="$(objdump -T src-tauri/target/release/updaitium | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -n1)"
           echo "Newest required glibc symbol: $highest"
           if [ "$(printf '%s\nGLIBC_2.35\n' "$highest" | sort -uV | tail -n1)" != "GLIBC_2.35" ]; then

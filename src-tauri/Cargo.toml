@@ -43,9 +43,4 @@ keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust", "
 codegen-units = 1
 lto = true
 opt-level = 3
-# Keep the default unwinding panic strategy: with `panic = "abort"` any panic
-# on any thread terminates the whole app, which made Updainium exit without
-# an error message when something failed at runtime (for example without
-# network access). Unwinding lets a panicking worker thread die alone while
-# the window stays open, and command errors already surface in the UI.
 strip = true
