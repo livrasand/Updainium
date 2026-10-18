@@ -67,6 +67,11 @@
     macos: [".dmg", ".pkg"],
     linux: [".appimage", ".deb", ".rpm"],
   };
+  const osLabels: Record<string, string> = {
+    windows: "Windows",
+    macos: "macOS",
+    linux: "Linux",
+  };
 
   let sources = $state<TrackedSource[]>([]);
   let platform = $state<Platform | null>(null);
@@ -386,8 +391,26 @@
           const architectureLabel =
             architectures.find((option) => option.value === architecture)?.label ??
             "this device";
+          const availableExtensions = [
+            ...new Set(
+              (release.assets ?? [])
+                .map((item) => (item.name.match(/\.[^./]+$/)?.[0] ?? "").toLowerCase())
+                .filter(Boolean),
+            ),
+          ].sort();
+          const availableLabel = availableExtensions.length
+            ? ` This release offers: ${availableExtensions.join(", ")}.`
+            : "";
+          const osKey = platform?.os ?? "";
+          const nativeFormat = formats[osKey]?.find((format) =>
+            availableExtensions.includes(format),
+          );
+          const platformHint =
+            osKey && nativeFormat && nativeFormat !== source.assetExtension.toLowerCase()
+              ? ` On ${osLabels[osKey] ?? osKey}, this release ships ${nativeFormat}; try ${nativeFormat} instead.`
+              : "";
           throw new Error(
-            `No release asset ends with ${source.assetExtension} for ${architectureLabel}.`,
+            `No release asset ends with ${source.assetExtension} for ${architectureLabel}.${availableLabel}${platformHint}`,
           );
         }
         const supported = formats[platform.os]?.join(", ") ?? "no compatible formats";
@@ -1161,6 +1184,7 @@
                     {#if source.iconUrl}
                       <img src={source.iconUrl} alt="" onerror={(event) => event.currentTarget.setAttribute("hidden", "")} />
                     {/if}
+                    {#if source.error}<span class="avatar-error-badge" title={source.error}></span>{/if}
                   </span>
                   <span class="app-details">
                     <span class="app-title-row">
@@ -1168,7 +1192,6 @@
                       {#if hasUpdate(source)}<span class="update-badge">Update available</span>{/if}
                     </span>
                     <span class="repo-link">by {source.repo.split("/").slice(0, -1).join("/")}</span>
-                    {#if source.error}<span class="source-error">{source.error}</span>{/if}
                   </span>
                   <span class="release-summary">
                     {#if source.version}<span class="release-version">{source.version}</span>{/if}
@@ -1344,9 +1367,9 @@
   .app-card-content { display: flex; min-height: inherit; align-items: center; gap: 15px; padding: 17px 16px; }
   .app-open-button { display: flex; min-width: 0; flex: 1; align-items: center; gap: 15px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
   .app-open-button:focus-visible { outline: 2px solid var(--accent, #705394); outline-offset: 4px; border-radius: 8px; }
-  .app-avatar { position: relative; display: grid; width: 43px; height: 43px; flex: 0 0 auto; place-items: center; border: 1px solid #e5e1fb; border-radius: 12px; background: linear-gradient(145deg, #f5f2ff, #e9e4ff); color: #725bd8; font-size: 19px; font-weight: 700; }
-  .app-avatar.has-icon { border: 0; border-radius: 0; background: transparent; }
-  .app-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 0; object-fit: contain; }
+  .app-avatar { position: relative; display: grid; width: 43px; height: 43px; flex: 0 0 auto; place-items: center; border: 1px solid #e5e1fb; border-radius: 21px; background: linear-gradient(145deg, #f5f2ff, #e9e4ff); color: #725bd8; font-size: 19px; font-weight: 700; }
+  .app-avatar.has-icon { border: 0; border-radius: 21px; background: transparent; }
+  .app-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 21px; object-fit: contain; }
   .detail-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
   .app-details { min-width: 0; flex: 1; }
   .app-title-row { display: flex; align-items: center; gap: 9px; }
@@ -1354,7 +1377,7 @@
   .app-name { overflow: hidden; margin: 0; color: #34333f; font-size: 14px; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
   .app-name { display: block; }
   .repo-link { display: inline-block; max-width: 100%; overflow: hidden; margin-top: 4px; color: #8c8a98; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-  .source-error { margin: 9px 0 0; color: #b84b48; font-size: 11px; line-height: 1.45; }
+  .avatar-error-badge { position: absolute; top: -3px; right: -3px; width: 11px; height: 11px; border: 2px solid #fff; border-radius: 50%; background: #b84b48; }
   .reopen-link { margin-top: 5px; padding: 0; border: 0; background: none; color: #6951da; font-size: 11px; cursor: pointer; text-decoration: underline; }
   :global(.icon-button) { display: grid; width: 34px; height: 34px; min-width: 0; flex: 0 0 auto; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #858391; cursor: pointer; }
   :global(.icon-button:hover) { border-color: #e9e7f1; background: #f8f7fb; color: #6650d1; }
@@ -1424,7 +1447,7 @@
   .hash-value { display: block; margin-top: 4px; color: var(--text, #24212a); font-family: "Roboto Mono", monospace; font-size: 12px; overflow-wrap: anywhere; user-select: all; }
   .hash-status { margin-top: 12px; color: var(--muted, #56515d); font-size: 12px; line-height: 1.5; }
   .hash-status.hash-failed { color: #b84b48; }
-  .source-card { padding: 19px 24px 0; }
+  .source-card { padding: 19px 24px; }
   .detail-repository { display: block; overflow-wrap: anywhere; color: var(--text, #24212a); font-size: 15px; font-style: italic; text-decoration: underline; text-underline-offset: 3px; }
   .detail-extension { margin-top: 9px; color: var(--muted, #56515d); font-size: 14px; }
   .detail-extension strong { display: block; margin-top: 4px; color: var(--text, #24212a); font-weight: 450; overflow-wrap: anywhere; }
@@ -1484,7 +1507,7 @@
     .search-box { width: 100%; }
     .app-card-content { align-items: flex-start; gap: 10px; padding: 13px 11px; }
     .app-open-button { gap: 10px; }
-    .app-avatar { width: 36px; height: 36px; border-radius: 10px; font-size: 16px; }
+    .app-avatar { width: 36px; height: 36px; border-radius: 21px; font-size: 16px; }
     .app-title-row { flex-wrap: wrap; gap: 5px; }
     .app-name { font-size: 12px; }
   }

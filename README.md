@@ -68,6 +68,8 @@ We promise:
 
 ---
 
+## Contributors
+
 <a href="https://github.com/livrasand/Updainium/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=livrasand/Updainium" />
 </a>
