@@ -59,7 +59,6 @@ test("rejects unsupported, malformed, duplicate, and oversized backups", () => {
       id: `app-${i}`, repo: `owner/app-${i}`, url: `https://github.com/owner/app-${i}`,
     })),
   })), new RegExp(String(maxBackupSources)));
-  // Boundary: exactly maxBackupSources apps is still accepted.
   assert.equal(parseBackup(JSON.stringify({
     ...fixture(),
     sources: Array.from({ length: maxBackupSources }, (_, i) => ({

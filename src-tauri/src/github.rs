@@ -20,8 +20,6 @@ pub struct GithubState(
     RequestRegistry,
 );
 
-/// Abort handles for every in-flight GitHub request, keyed by request ID, so
-/// concurrent operations can be cancelled without overwriting each other.
 #[derive(Clone, Default)]
 struct RequestRegistry(Arc<Mutex<RequestRegistryInner>>);
 
@@ -57,7 +55,6 @@ impl RequestRegistry {
                 .map_err(|_| "GitHub request state is unavailable.")?;
             inner.handles.values().cloned().collect()
         };
-        // Abort outside the lock so task wakeups never deadlock against the registry.
         for abort in aborts {
             abort.abort();
         }
@@ -70,8 +67,6 @@ impl RequestRegistry {
     }
 }
 
-/// Removes this request's abort handle when the operation ends, even if the
-/// surrounding task is dropped before the future completes.
 struct RequestGuard {
     registry: RequestRegistry,
     id: u64,
@@ -104,8 +99,6 @@ pub fn github_cancel_request(state: State<'_, GithubState>) -> Result<(), String
 
 fn cancel_request(state: &GithubState) -> Result<(), String> {
     state.2.cancel_all()?;
-    // Invalidate a token connection whose credential-save task has not started.
-    // Do not block cancellation on an OS credential-store prompt already in progress.
     if let Ok(mut session) = state.0.try_lock() {
         session.generation = session.generation.wrapping_add(1);
     }
@@ -212,18 +205,9 @@ fn verify_revision(value: &Value, expected: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Confirms that a completed update is still based on the reviewed revision.
-///
-/// GitHub does not document conditional (If-Match) support for the gist PATCH
-/// endpoint, so a stale write can be applied even when the header is ignored.
-/// The gist history is newest-first, so after our write the reviewed revision
-/// must be the head (a no-op update) or its immediate parent (a normal update).
-/// Anything else means another write landed between our read and our update.
 fn verify_no_interleaving(value: &Value, expected: &str) -> Result<(), String> {
     let history = match value["history"].as_array() {
         Some(history) if !history.is_empty() => history,
-        // Responses without history cannot be checked; If-Match guards the write
-        // whenever GitHub honors it, so this is not treated as a conflict.
         _ => return Ok(()),
     };
     if history
@@ -383,8 +367,6 @@ fn token(state: &GithubState) -> Result<String, String> {
         .ok_or_else(|| "Sign in to GitHub first.".into())
 }
 
-/// Returns the signed-in login without an extra `/user` round-trip, keeping the
-/// gap between reading a gist and updating it as small as possible.
 fn login(state: &GithubState) -> Result<String, String> {
     state
         .0
@@ -498,6 +480,145 @@ pub async fn github_connect_token(
     .await
 }
 
+#[derive(Clone)]
+pub struct ApiTokenState(Arc<Mutex<Option<Option<String>>>>, Arc<dyn TokenStore>);
+
+impl Default for ApiTokenState {
+    fn default() -> Self {
+        Self(Arc::default(), Arc::new(SystemTokenStore))
+    }
+}
+
+trait TokenStore: Send + Sync {
+    fn read(&self) -> Result<Option<String>, String>;
+    fn write(&self, token: &str) -> Result<(), String>;
+    fn delete(&self) -> Result<(), String>;
+}
+
+struct SystemTokenStore;
+
+impl TokenStore for SystemTokenStore {
+    fn read(&self) -> Result<Option<String>, String> {
+        match api_token_entry()?.get_password() {
+            Ok(saved) if saved.is_empty() => Ok(None),
+            Ok(saved) => Ok(Some(saved)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err("Could not read your GitHub token. Unlock your system credential store and try again.".into()),
+        }
+    }
+    fn write(&self, token: &str) -> Result<(), String> {
+        api_token_entry()?.set_password(token)
+            .map_err(|_| "Could not save your GitHub token. Unlock your system credential store and try again.".into())
+    }
+    fn delete(&self) -> Result<(), String> {
+        match api_token_entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err("Your GitHub token was removed from memory, but could not be deleted from the credential store. Unlock it and try again.".into()),
+        }
+    }
+}
+
+fn api_token_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new("com.livrasand.updainium.github", "github-api-token")
+        .map_err(|_| "Could not access the system credential store.")
+        .map_err(str::to_owned)
+}
+
+pub async fn api_token(state: ApiTokenState) -> Result<Option<String>, String> {
+    let cached = {
+        let cache = state
+            .0
+            .lock()
+            .map_err(|_| "GitHub token state is unavailable.".to_owned())?;
+        cache.clone()
+    };
+    if let Some(token) = cached {
+        return Ok(token);
+    }
+    tauri::async_runtime::spawn_blocking(move || load_api_token(&state))
+        .await
+        .map_err(|_| "Could not load your GitHub token.".to_owned())?
+}
+
+fn load_api_token(state: &ApiTokenState) -> Result<Option<String>, String> {
+    let mut cache = state
+        .0
+        .lock()
+        .map_err(|_| "GitHub token state is unavailable.")?;
+    if let Some(token) = cache.clone() {
+        return Ok(token);
+    }
+    let token = state.1.read()?;
+    *cache = Some(token.clone());
+    Ok(token)
+}
+
+fn store_api_token(state: &ApiTokenState, token: String) -> Result<(), String> {
+    state.1.write(&token)?;
+    *state
+        .0
+        .lock()
+        .map_err(|_| "GitHub token state is unavailable.")? = Some(Some(token));
+    Ok(())
+}
+
+fn remove_api_token(state: &ApiTokenState) -> Result<(), String> {
+    state.1.delete()?;
+    *state
+        .0
+        .lock()
+        .map_err(|_| "GitHub token state is unavailable.")? = Some(None);
+    Ok(())
+}
+
+async fn verify_api_token(token: &str) -> Result<(), String> {
+    let response = client()?
+        .get("https://api.github.com/user")
+        .bearer_auth(token)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .await
+        .map_err(|_| "Could not verify the token with GitHub. Check your connection and try again.")?;
+    match response.status().as_u16() {
+        200 => Ok(()),
+        401 => Err("GitHub rejected this token. Create a new personal access token and try again.".into()),
+        403 => Err("GitHub denied this token. Check its permissions or try again after the rate limit resets.".into()),
+        status => Err(format!("GitHub could not verify this token (HTTP {status}).")),
+    }
+}
+
+#[tauri::command]
+pub async fn github_api_token_status(state: State<'_, ApiTokenState>) -> Result<bool, String> {
+    api_token(state.inner().clone())
+        .await
+        .map(|token| token.is_some())
+}
+
+#[tauri::command]
+pub async fn github_api_token_save(
+    state: State<'_, ApiTokenState>,
+    access_token: String,
+) -> Result<(), String> {
+    let token = access_token.trim().to_owned();
+    if token.is_empty() || token.len() > 512 {
+        return Err("Enter a valid GitHub token.".into());
+    }
+    verify_api_token(&token).await?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || store_api_token(&state, token))
+        .await
+        .map_err(|_| "Could not save your GitHub token.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn github_api_token_clear(state: State<'_, ApiTokenState>) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || remove_api_token(&state))
+        .await
+        .map_err(|_| "Could not remove your GitHub token.".to_owned())?
+}
+
 fn summary(value: Value) -> Result<GistSummary, String> {
     serde_json::from_value(value).map_err(|_| "GitHub returned invalid gist information.".into())
 }
@@ -518,7 +639,6 @@ pub async fn github_list_backups(
     github_operation(&state, async {
         let token = token(&state)?;
         let mut backups = Vec::new();
-        // Paginate so backups are discoverable even on accounts with many gists.
         for page in 1..=100 {
             let value = api(
                 &token,
@@ -552,7 +672,6 @@ pub async fn github_read_backup(
 ) -> Result<String, String> {
     github_operation(&state, async {
         gist_id(&id)?;
-        // Public and secret gists are readable by ID without an account, including shared catalogs.
         let path = if let Some(revision) = revision {
             revision_id(&revision)?;
             format!("/gists/{id}/{revision}")
@@ -574,7 +693,6 @@ pub async fn github_read_backup(
             {
                 return Err("GitHub returned an unexpected backup URL.".into());
             }
-            // Secret gist raw URLs are readable without authorization. Never send the token to a second host.
             let mut response = client()?
                 .get(url)
                 .send()
@@ -634,10 +752,6 @@ pub async fn github_write_backup(
             if existing.value["owner"]["login"].as_str() != Some(login(&state)?.as_str()) {
                 return Err("You can only update your own backup gists.".into());
             }
-            // Send the reviewed revision's ETag so GitHub can reject a write that
-            // raced with another client (HTTP 412). GitHub only honors conditional
-            // requests on some endpoints, so re-check the returned history afterwards
-            // to catch a clobber when the header is ignored.
             let etag = existing
                 .etag
                 .ok_or("GitHub did not return the current backup revision.")?;
@@ -683,13 +797,10 @@ mod tests {
         let base = "a".repeat(40);
         let ours = "b".repeat(40);
         let theirs = "c".repeat(40);
-        // Normal update: our new revision sits on top of the reviewed one.
         let updated = json!({ "history": [{ "version": ours }, { "version": base }] });
         assert!(verify_no_interleaving(&updated, &base).is_ok());
-        // No-op update: the reviewed revision is still the head.
         let unchanged = json!({ "history": [{ "version": base }] });
         assert!(verify_no_interleaving(&unchanged, &base).is_ok());
-        // Another write landed between our read and our update.
         let clobbered = json!({ "history": [
             { "version": ours },
             { "version": theirs },
@@ -698,7 +809,6 @@ mod tests {
         assert!(verify_no_interleaving(&clobbered, &base)
             .unwrap_err()
             .contains("while your update was uploading"));
-        // A response without history cannot be verified and is not a conflict.
         assert!(verify_no_interleaving(&json!({}), &base).is_ok());
         assert!(verify_no_interleaving(&json!({ "history": [] }), &base).is_ok());
     }
@@ -734,7 +844,6 @@ mod tests {
             let first = github_operation(&state, std::future::pending::<Result<(), String>>());
             let second = github_operation(&state, std::future::pending::<Result<(), String>>());
             let inspect = async {
-                // Both requests are registered; finishing one must not clear the other.
                 assert_eq!(state.2.len(), 2);
                 assert_eq!(github_operation(&state, async { Ok(7) }).await.unwrap(), 7);
                 assert_eq!(state.2.len(), 2);

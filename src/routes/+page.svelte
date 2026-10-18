@@ -109,8 +109,6 @@
       ? `${platform.os === "macos" ? "macOS" : platform.os} · ${platform.arch}`
       : "Detecting system",
   );
-  // Percentage only when the server published a content length; anything else
-  // gets an indeterminate bar instead of a made-up number.
   const downloadPercent = $derived.by(() => {
     if (!downloadProgress) return null;
     if (downloadProgress.phase !== "downloading") return 100;
@@ -374,9 +372,6 @@
                 `${origin}/api/v3/repos/${reference.repositoryPath}/releases/latest`,
                 `${origin}/api/v4/projects/${encodeURIComponent(reference.repositoryPath)}/releases/permalink/latest`,
               ];
-      // Forge APIs do not send `Access-Control-Allow-Origin`, so requesting them
-      // from the WebView fails with "Load failed" even when they are reachable.
-      // The backend fetches instead, where no cross-origin policy applies.
       const release = await invoke<Release>("fetch_release_metadata", { apiUrls });
       const asset = source.assetExtension
         ? assetForExtension(
@@ -718,7 +713,6 @@
     sources = sources.map((item) => (item.id === source.id ? { ...item, error: "" } : item));
     try {
       await invoke("uninstall_app", { identifier: source.appIdentifier });
-      // The manual fallback must not mask the fresh detection after removal.
       sources = sources.map((item) =>
         item.id === source.id
           ? { ...item, lastKnownInstalledVersion: undefined, installedVersionSource: undefined }
@@ -795,8 +789,6 @@
           : item,
       );
       await openPath(downloaded.path);
-      // The installer may register the app immediately; refresh detection so the
-      // primary action switches to Uninstall/Update as soon as it is visible.
       await checkInstalled(source);
     } catch (error) {
       const verificationFailure = messageOf(error).match(/failed SHA-256 verification\. Expected [a-f0-9]{64}, got ([a-f0-9]{64})\./i);

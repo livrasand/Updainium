@@ -78,7 +78,6 @@ export function parseBackup(text: string): Backup {
     }
     return result;
   });
-  // Reconstruct only known portable fields; credentials and device paths never pass through.
   return { format: "updainium-backup", version: 1, exportedAt: value.exportedAt,
     settings: { backgroundEnabled: value.settings.backgroundEnabled, startOnLogin: value.settings.startOnLogin }, sources };
 }

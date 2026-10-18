@@ -2,6 +2,8 @@
 
 Get release files straight from the source.
 
+[![Downloads](https://img.shields.io/github/downloads/livrasand/Updainium/total)](https://github.com/livrasand/Updainium/releases)
+
 ## What is Updainium?
 Inspired by the incredible [Obtainium](https://github.com/ImranR98/Obtainium), Updainium is natively tailored for your desktop operating system. 
 

@@ -50,9 +50,6 @@ struct DownloadProgress {
     total: Option<u64>,
 }
 
-/// Reports download progress to the frontend without flooding the webview:
-/// events are throttled, and `total` stays `None` when the server does not
-/// publish a content length, so the UI can show an indeterminate indicator.
 fn emit_download_progress(
     app: &tauri::AppHandle,
     download_id: &str,
@@ -75,6 +72,7 @@ fn emit_download_progress(
 pub fn run() {
     tauri::Builder::default()
         .manage(github::GithubState::default())
+        .manage(github::ApiTokenState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
@@ -133,6 +131,9 @@ pub fn run() {
             github::github_backup_history,
             github::github_read_backup,
             github::github_write_backup,
+            github::github_api_token_status,
+            github::github_api_token_save,
+            github::github_api_token_clear,
             get_platform,
             set_background_mode,
             identify_installed_app_identifier,
@@ -260,13 +261,26 @@ fn normalize_release(payload: serde_json::Value) -> Release {
     }
 }
 
+async fn github_api_token_or_anonymous(
+    state: &github::ApiTokenState,
+) -> Option<String> {
+    github::api_token(state.clone())
+        .await
+        .ok()
+        .flatten()
+}
+
 #[tauri::command]
-async fn fetch_release_metadata(api_urls: Vec<String>) -> Result<Release, String> {
+async fn fetch_release_metadata(
+    api_urls: Vec<String>,
+    token_state: tauri::State<'_, github::ApiTokenState>,
+) -> Result<Release, String> {
     if api_urls.is_empty() {
         return Err("No release API endpoint could be derived from the URL.".into());
     }
 
     let client = https_client()?;
+    let api_token = github_api_token_or_anonymous(&token_state).await;
     let mut not_found = false;
     let mut transport_error: Option<String> = None;
 
@@ -279,13 +293,15 @@ async fn fetch_release_metadata(api_urls: Vec<String>) -> Result<Release, String
             }
         };
 
-        let response = match client
+        let mut request = client
             .get(parsed_url)
             .header(reqwest::header::USER_AGENT, "Updainium")
-            .header(reqwest::header::ACCEPT, "application/json")
-            .send()
-            .await
-        {
+            .header(reqwest::header::ACCEPT, "application/json");
+        if let Some(token) = &api_token {
+            request = request.bearer_auth(token);
+        }
+
+        let response = match request.send().await {
             Ok(response) => response,
             Err(error) => {
                 transport_error = Some(error.to_string());
@@ -317,12 +333,20 @@ async fn fetch_release_metadata(api_urls: Vec<String>) -> Result<Release, String
 }
 
 #[tauri::command]
-async fn fetch_repository_icon(api_url: String) -> Result<Option<String>, String> {
+async fn fetch_repository_icon(
+    api_url: String,
+    token_state: tauri::State<'_, github::ApiTokenState>,
+) -> Result<Option<String>, String> {
     let parsed_url = parse_https_url(&api_url, "The repository API must be reached over HTTPS.")?;
-    let payload: serde_json::Value = https_client()?
+    let api_token = github_api_token_or_anonymous(&token_state).await;
+    let mut request = https_client()?
         .get(parsed_url)
         .header(reqwest::header::USER_AGENT, "Updainium")
-        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::ACCEPT, "application/json");
+    if let Some(token) = &api_token {
+        request = request.bearer_auth(token);
+    }
+    let payload: serde_json::Value = request
         .send()
         .await
         .map_err(|error| error.to_string())?
@@ -737,11 +761,6 @@ fn validate_identifier(identifier: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Uninstalls the app identified by its bundle/package/registry identifier.
-///
-/// - macOS: moves the matching `.app` bundle to the Trash.
-/// - Windows: runs the registry `UninstallString` of the matching entry.
-/// - Linux: removes the matching dpkg/rpm package via `pkexec` (graphical auth prompt).
 #[tauri::command]
 fn uninstall_app(identifier: String) -> Result<(), String> {
     validate_identifier(&identifier)?;
@@ -794,7 +813,6 @@ fn uninstall_macos_app(identifier: &str) -> Result<(), String> {
         "No installed app bundle matched this identifier, so it could not be uninstalled.".to_owned()
     })?;
 
-    // Ask Finder to move the bundle to the Trash (safer than a permanent delete).
     let script = format!("tell application \"Finder\" to delete POSIX file \"{app_path}\"");
     let output = Command::new("osascript")
         .args(["-e", &script])
@@ -854,7 +872,6 @@ fn uninstall_windows_app(identifier: &str) -> Result<(), String> {
 
 #[cfg(target_os = "linux")]
 fn uninstall_linux_app(identifier: &str) -> Result<(), String> {
-    // dpkg-based distros (Debian/Ubuntu).
     let dpkg = Command::new("dpkg-query")
         .args(["--show", "--showformat=${db:Status-Status}", "--", identifier])
         .output();
@@ -870,7 +887,6 @@ fn uninstall_linux_app(identifier: &str) -> Result<(), String> {
             return Err(format!("The package manager exited with status {status}."));
         }
     }
-    // rpm-based distros (Fedora/RHEL).
     let rpm = Command::new("rpm")
         .args(["-q", "--", identifier])
         .output();
