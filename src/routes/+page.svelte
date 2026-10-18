@@ -87,6 +87,7 @@
   let appFileDragOver = $state(false);
   let checking = $state<string[]>([]);
   let downloading = $state<string | null>(null);
+  let uninstalling = $state<string | null>(null);
   let downloadProgress = $state<DownloadProgressEvent | null>(null);
   let installedVersions = $state<Record<string, string | null | undefined>>({});
   let installedCheckErrors = $state<string[]>([]);
@@ -633,29 +634,85 @@
     rememberInstalledVersion(source.id, source.version, "manual");
   }
 
+  function isInstalled(source: TrackedSource): boolean {
+    return Boolean(installedVersionForComparison(source));
+  }
+
+  function operationInFlight(source: TrackedSource): boolean {
+    return downloading === source.id || uninstalling === source.id;
+  }
+
+  function anyOperationInFlight(): boolean {
+    return downloading !== null || uninstalling !== null;
+  }
+
   function installActionLabel(source: TrackedSource): string {
-    if (downloading === source.id) {
-      return downloadPercent !== null ? `Downloading ${downloadPercent}%` : "Downloading…";
-    }
+    if (uninstalling === source.id) return "Uninstalling…";
+    if (downloading === source.id) return hasUpdate(source) ? "Updating…" : "Installing…";
     if (installedCheckErrors.includes(source.id)) {
       if (hasUpdate(source)) return "Update";
-      return installedVersionForComparison(source) ? "Up to date" : "Install";
+      return isInstalled(source) ? "Uninstall" : "Install";
     }
     if (installedVersions[source.id] === undefined) {
-      if (installedVersionForComparison(source)) return hasUpdate(source) ? "Update" : "Up to date";
+      if (isInstalled(source)) return hasUpdate(source) ? "Update" : "Uninstall";
       return source.appIdentifier ? "Checking…" : "Install";
     }
-    if (installedVersionForComparison(source)) return hasUpdate(source) ? "Update" : "Up to date";
+    if (isInstalled(source)) return hasUpdate(source) ? "Update" : "Uninstall";
     return "Install";
   }
 
   function canInstallOrUpdate(source: TrackedSource): boolean {
-    if (!source.assetUrl || checking.includes(source.id) || downloading !== null) return false;
+    if (!source.assetUrl || checking.includes(source.id) || anyOperationInFlight()) return false;
     if (
       source.appIdentifier && installedVersions[source.id] === undefined &&
       !source.lastKnownInstalledVersion && !installedCheckErrors.includes(source.id)
     ) return false;
-    return !(installedVersionForComparison(source) && !hasUpdate(source));
+    return !(isInstalled(source) && !hasUpdate(source));
+  }
+
+  function canUninstall(source: TrackedSource): boolean {
+    if (!source.appIdentifier || checking.includes(source.id) || anyOperationInFlight()) return false;
+    if (installedCheckErrors.includes(source.id)) return isInstalled(source);
+    if (installedVersions[source.id] === undefined) {
+      return Boolean(source.lastKnownInstalledVersion);
+    }
+    return isInstalled(source);
+  }
+
+  async function runPrimaryAction(source: TrackedSource): Promise<void> {
+    if (isInstalled(source) && !hasUpdate(source)) {
+      await uninstallApp(source);
+    } else {
+      await downloadAndOpen(source);
+    }
+  }
+
+  async function uninstallApp(source: TrackedSource): Promise<void> {
+    if (!canUninstall(source) || !source.appIdentifier) return;
+    const appName = source.repo.split("/").at(-1) ?? source.repo;
+    if (!confirm(`Uninstall ${appName} from this device?`)) return;
+    uninstalling = source.id;
+    sources = sources.map((item) => (item.id === source.id ? { ...item, error: "" } : item));
+    try {
+      await invoke("uninstall_app", { identifier: source.appIdentifier });
+      // The manual fallback must not mask the fresh detection after removal.
+      sources = sources.map((item) =>
+        item.id === source.id
+          ? { ...item, lastKnownInstalledVersion: undefined, installedVersionSource: undefined }
+          : item,
+      );
+      installedVersions[source.id] = undefined;
+      await checkInstalled(source);
+      showSnackbar(`${appName} was uninstalled.`);
+    } catch (error) {
+      sources = sources.map((item) =>
+        item.id === source.id
+          ? { ...item, error: `Could not uninstall the app: ${messageOf(error)}` }
+          : item,
+      );
+    } finally {
+      uninstalling = null;
+    }
   }
 
   function hasUpdate(source: TrackedSource): boolean {
@@ -673,7 +730,7 @@
   }
 
   async function downloadAndOpen(source: TrackedSource): Promise<void> {
-    if (!source.assetUrl || downloading) return;
+    if (!source.assetUrl || downloading || uninstalling) return;
     downloading = source.id;
     downloadProgress = { downloadId: source.id, phase: "downloading", received: 0, total: null };
     let unlistenProgress: (() => void) | undefined;
@@ -715,6 +772,9 @@
           : item,
       );
       await openPath(downloaded.path);
+      // The installer may register the app immediately; refresh detection so the
+      // primary action switches to Uninstall/Update as soon as it is visible.
+      await checkInstalled(source);
     } catch (error) {
       const verificationFailure = messageOf(error).match(/failed SHA-256 verification\. Expected [a-f0-9]{64}, got ([a-f0-9]{64})\./i);
       if (verificationFailure) {
@@ -989,7 +1049,7 @@
                   {/if}
                 </div>
               {/if}
-              <Button class="detail-download" variant="text" type="button" onclick={() => downloadAndOpen(selectedSource)} disabled={downloading !== null}>
+              <Button class="detail-download" variant="text" type="button" onclick={() => downloadAndOpen(selectedSource)} disabled={downloading !== null || uninstalling !== null}>
                 {#if downloading === selectedSource.id}
                   <span class="button-spinner"></span>{downloadStatusLabel}
                 {:else}
@@ -1001,7 +1061,7 @@
           </section>
 
           <div class="detail-actions">
-            <button class="detail-icon-button" type="button" aria-label={`Edit ${selectedSource.repo}`} title="Edit app" onclick={() => editSource(selectedSource)} disabled={checking.includes(selectedSource.id) || downloading === selectedSource.id}>
+            <button class="detail-icon-button" type="button" aria-label={`Edit ${selectedSource.repo}`} title="Edit app" onclick={() => editSource(selectedSource)} disabled={checking.includes(selectedSource.id) || operationInFlight(selectedSource)}>
               <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" class="detail-icon-filled" aria-hidden="true"><path d="M200-200h57l391-391-57-57-391 391v57Zm-80 80v-170l528-527q12-11 26.5-17t30.5-6q16 0 31 6t26 18l55 56q12 11 17.5 26t5.5 30q0 16-5.5 30.5T817-647L290-120H120Zm640-584-56-56 56 56Zm-141 85-28-29 57 57-29-28Z"/></svg>
             </button>
             <button class="detail-icon-button" type="button" aria-label="Check release again" title="Check release again" onclick={() => refreshSource(selectedSource)} disabled={checking.includes(selectedSource.id)}>
@@ -1012,10 +1072,12 @@
             </button>
             <button
               class="detail-install-button"
+              class:destructive={isInstalled(selectedSource) && !hasUpdate(selectedSource)}
               type="button"
-              onclick={() => downloadAndOpen(selectedSource)}
-              disabled={!canInstallOrUpdate(selectedSource)}
+              onclick={() => runPrimaryAction(selectedSource)}
+              disabled={!canInstallOrUpdate(selectedSource) && !canUninstall(selectedSource)}
             >
+              {#if uninstalling === selectedSource.id}<span class="button-spinner"></span>{/if}
               {installActionLabel(selectedSource)}
             </button>
           </div>
@@ -1371,9 +1433,12 @@
   :global(.detail-download svg) { width: 19px; height: 19px; fill: currentColor; stroke: none; }
   :global(.detail-download:disabled) { opacity: .65; cursor: wait; }
   .detail-actions { display: flex; gap: 10px; margin-top: 18px; padding: 20px 22px; border-radius: 22px; background: var(--surface, #f7f0f8); }
-  .detail-install-button { min-width: 104px; margin-left: auto; padding: 0 22px; border: 0; border-radius: 22px; background: #e9dcff; color: #4e3973; font-size: 15px; cursor: pointer; }
+  .detail-install-button { min-width: 104px; margin-left: auto; padding: 0 22px; border: 0; border-radius: 22px; background: #e9dcff; color: #4e3973; font-size: 15px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
   .detail-install-button:hover:not(:disabled) { background: #ddcaff; }
   .detail-install-button:disabled { opacity: .48; cursor: not-allowed; }
+  .detail-install-button.destructive { background: #fbdcdc; color: #8a2b2b; }
+  .detail-install-button.destructive:hover:not(:disabled) { background: #f6c9c9; }
+  .detail-install-button .button-spinner { border-color: rgb(78 57 115 / 30%); border-top-color: #4e3973; }
   .detail-icon-button { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid var(--border, #e9e0ec); border-radius: 50%; background: var(--surface-raised, #fffaff); color: var(--muted, #56515d); cursor: pointer; transition: background .16s ease, color .16s ease, transform .16s ease; }
   .detail-icon-button:hover { background: var(--surface-muted, #eee7f0); color: var(--accent, #705394); }
   .detail-icon-button:active { transform: scale(.96); }
@@ -1678,6 +1743,9 @@
     }
     .detail-install-button { background: #503d70; color: #f2e9ff; }
     .detail-install-button:hover:not(:disabled) { background: #624b88; }
+    .detail-install-button.destructive { background: #6e3232; color: #ffdede; }
+    .detail-install-button.destructive:hover:not(:disabled) { background: #824040; }
+    .detail-install-button .button-spinner { border-color: rgb(242 233 255 / 30%); border-top-color: #f2e9ff; }
     :global(.primary-button.add-button) { background: #503d70; color: #f2e9ff; }
     :global(.primary-button.add-button:hover) { background: #624b88; }
   }

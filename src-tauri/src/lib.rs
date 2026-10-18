@@ -138,6 +138,7 @@ pub fn run() {
             identify_installed_app_identifier,
             identify_app_identifier_from_path,
             get_installed_app_version,
+            uninstall_app,
             download_release_asset,
             fetch_release_metadata,
             fetch_repository_icon
@@ -572,7 +573,7 @@ fn identify_macos_app_identifier(
             .output()
             .map_err(|error| error.to_string())?;
         for path in String::from_utf8_lossy(&matches.stdout).lines() {
-            if !path.ends_with(".app") {
+            if !path.ends_with(".app") || !std::path::Path::new(path).is_dir() {
                 continue;
             }
             let info = format!("{path}/Contents/Info.plist");
@@ -707,13 +708,7 @@ fn identify_linux_app_identifier(app_name: &str) -> Result<Option<String>, Strin
 
 #[tauri::command]
 fn get_installed_app_version(identifier: String) -> Result<Option<String>, String> {
-    if identifier.is_empty()
-        || !identifier
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || " .-_{}+~:@".contains(character))
-    {
-        return Err("The app/package identifier contains unsupported characters.".into());
-    }
+    validate_identifier(&identifier)?;
 
     #[cfg(target_os = "macos")]
     {
@@ -729,6 +724,169 @@ fn get_installed_app_version(identifier: String) -> Result<Option<String>, Strin
     }
     #[allow(unreachable_code)]
     Err("Installed app detection is not supported on this operating system.".into())
+}
+
+fn validate_identifier(identifier: &str) -> Result<(), String> {
+    if identifier.is_empty()
+        || !identifier
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || " .-_{}+~:@".contains(character))
+    {
+        return Err("The app/package identifier contains unsupported characters.".into());
+    }
+    Ok(())
+}
+
+/// Uninstalls the app identified by its bundle/package/registry identifier.
+///
+/// - macOS: moves the matching `.app` bundle to the Trash.
+/// - Windows: runs the registry `UninstallString` of the matching entry.
+/// - Linux: removes the matching dpkg/rpm package via `pkexec` (graphical auth prompt).
+#[tauri::command]
+fn uninstall_app(identifier: String) -> Result<(), String> {
+    validate_identifier(&identifier)?;
+
+    #[cfg(target_os = "macos")]
+    {
+        return uninstall_macos_app(&identifier);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return uninstall_windows_app(&identifier);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return uninstall_linux_app(&identifier);
+    }
+    #[allow(unreachable_code)]
+    Err("Uninstalling apps is not supported on this operating system.".into())
+}
+
+#[cfg(target_os = "macos")]
+fn uninstall_macos_app(identifier: &str) -> Result<(), String> {
+    let query = format!("kMDItemCFBundleIdentifier == '{identifier}'");
+    let mut app_directories = vec!["/Applications".to_owned()];
+    if let Some(home) = std::env::var_os("HOME") {
+        app_directories.push(
+            std::path::PathBuf::from(home)
+                .join("Applications")
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    let mut app_path: Option<String> = None;
+    for directory in app_directories {
+        let matches = Command::new("mdfind")
+            .args(["-onlyin", &directory, &query])
+            .output()
+            .map_err(|error| error.to_string())?;
+        for path in String::from_utf8_lossy(&matches.stdout).lines() {
+            if path.ends_with(".app") && std::path::Path::new(path).is_dir() {
+                app_path = Some(path.to_owned());
+                break;
+            }
+        }
+        if app_path.is_some() {
+            break;
+        }
+    }
+    let app_path = app_path.ok_or_else(|| {
+        "No installed app bundle matched this identifier, so it could not be uninstalled.".to_owned()
+    })?;
+
+    // Ask Finder to move the bundle to the Trash (safer than a permanent delete).
+    let script = format!("tell application \"Finder\" to delete POSIX file \"{app_path}\"");
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .output()
+        .map_err(|error| error.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Could not move the app to the Trash: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn uninstall_windows_app(identifier: &str) -> Result<(), String> {
+    let roots = [
+        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+    ];
+    for root in roots {
+        let key = format!(r"{root}\{identifier}");
+        let value = Command::new("reg")
+            .args(["query", &key, "/v", "UninstallString"])
+            .creation_flags(0x08000000)
+            .output()
+            .map_err(|error| error.to_string())?;
+        if !value.status.success() {
+            continue;
+        }
+        let uninstall_string = String::from_utf8_lossy(&value.stdout)
+            .lines()
+            .find(|line| line.contains("UninstallString"))
+            .and_then(|line| line.splitn(2, "REG_SZ").nth(1))
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        if uninstall_string.is_empty() {
+            continue;
+        }
+        let status = Command::new("cmd")
+            .args(["/C", &uninstall_string])
+            .creation_flags(0x08000000)
+            .status()
+            .map_err(|error| error.to_string())?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(format!(
+            "The app's uninstaller exited with status {status}."
+        ));
+    }
+    Err("No installed app matched this identifier in the Windows uninstall registry.".into())
+}
+
+#[cfg(target_os = "linux")]
+fn uninstall_linux_app(identifier: &str) -> Result<(), String> {
+    // dpkg-based distros (Debian/Ubuntu).
+    let dpkg = Command::new("dpkg-query")
+        .args(["--show", "--showformat=${db:Status-Status}", "--", identifier])
+        .output();
+    if let Ok(output) = dpkg {
+        if output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "installed" {
+            let status = Command::new("pkexec")
+                .args(["apt-get", "remove", "-y", "--", identifier])
+                .status()
+                .map_err(|error| error.to_string())?;
+            if status.success() {
+                return Ok(());
+            }
+            return Err(format!("The package manager exited with status {status}."));
+        }
+    }
+    // rpm-based distros (Fedora/RHEL).
+    let rpm = Command::new("rpm")
+        .args(["-q", "--", identifier])
+        .output();
+    if let Ok(output) = rpm {
+        if output.status.success() {
+            let status = Command::new("pkexec")
+                .args(["rpm", "-e", "--", identifier])
+                .status()
+                .map_err(|error| error.to_string())?;
+            if status.success() {
+                return Ok(());
+            }
+            return Err(format!("The package manager exited with status {status}."));
+        }
+    }
+    Err("No installed package matched this identifier, so it could not be uninstalled.".into())
 }
 
 #[cfg(target_os = "macos")]
@@ -749,7 +907,7 @@ fn installed_macos_version(identifier: &str) -> Result<Option<String>, String> {
             .output()
             .map_err(|error| error.to_string())?;
         for path in String::from_utf8_lossy(&matches.stdout).lines() {
-            if !path.ends_with(".app") {
+            if !path.ends_with(".app") || !std::path::Path::new(path).is_dir() {
                 continue;
             }
             let info = format!("{path}/Contents/Info.plist");
