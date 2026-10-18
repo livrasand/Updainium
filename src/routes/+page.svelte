@@ -1451,7 +1451,7 @@
   .detail-repository { display: block; overflow-wrap: anywhere; color: var(--text, #24212a); font-size: 15px; font-style: italic; text-decoration: underline; text-underline-offset: 3px; }
   .detail-extension { margin-top: 9px; color: var(--muted, #56515d); font-size: 14px; }
   .detail-extension strong { display: block; margin-top: 4px; color: var(--text, #24212a); font-weight: 450; overflow-wrap: anywhere; }
-  :global(.detail-download) { display: flex; width: calc(100% + 48px); min-height: 58px; margin: 19px -24px 0; align-items: center; justify-content: center; gap: 10px; border: 0; border-top: 1px solid color-mix(in srgb, var(--border, #e9e0ec) 60%, transparent); border-radius: 0; background: color-mix(in srgb, var(--surface) 72%, var(--surface-raised)); color: var(--accent-strong, #60427f); font-size: 15px; transition: background .16s ease; }
+  :global(.detail-download) { display: flex; width: calc(100% + 48px); min-height: 58px; margin: 19px -24px -19px; align-items: center; justify-content: center; gap: 10px; border: 0; border-top: 1px solid color-mix(in srgb, var(--border, #e9e0ec) 60%, transparent); border-radius: 0; background: color-mix(in srgb, var(--surface) 72%, var(--surface-raised)); color: var(--accent-strong, #60427f); font-size: 15px; transition: background .16s ease; }
   :global(.detail-download:hover) { background: var(--surface-muted, #eee7f0); }
   :global(.detail-download svg) { width: 19px; height: 19px; fill: currentColor; stroke: none; }
   :global(.detail-download:disabled) { opacity: .65; cursor: wait; }
