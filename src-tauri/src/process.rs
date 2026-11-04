@@ -777,10 +777,8 @@ mod platform {
             if !output.status.success() {
                 continue;
             }
-            let Some(line) = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .find(|line| line.contains("DisplayIcon"))
-            else {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let Some(line) = stdout.lines().find(|line| line.contains("DisplayIcon")) else {
                 continue;
             };
             let Some(value) = line.splitn(2, "REG_SZ").nth(1) else {
