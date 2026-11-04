@@ -3,6 +3,7 @@ use std::os::windows::process::CommandExt;
 use std::{fs, io::Write, process::Command};
 mod backup;
 mod github;
+mod process;
 use sha2::{Digest, Sha256};
 #[cfg(not(target_os = "macos"))]
 use tauri::menu::Submenu;
@@ -168,6 +169,9 @@ pub fn run() {
             github::github_api_token_clear,
             get_platform,
             set_background_mode,
+            process::get_running_app_state,
+            process::quit_running_app,
+            process::open_installed_app,
             identify_installed_app_identifier,
             identify_app_identifier_from_path,
             get_installed_app_version,
@@ -786,7 +790,7 @@ fn get_installed_app_version(identifier: String) -> Result<Option<String>, Strin
     Err("Installed app detection is not supported on this operating system.".into())
 }
 
-fn validate_identifier(identifier: &str) -> Result<(), String> {
+pub(crate) fn validate_identifier(identifier: &str) -> Result<(), String> {
     if identifier.is_empty()
         || !identifier
             .chars()
