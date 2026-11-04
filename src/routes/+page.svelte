@@ -5,7 +5,10 @@
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-  import { openPath } from "@tauri-apps/plugin-opener";
+  import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+  import { marked } from "marked";
+  import DOMPurify from "dompurify";
+  import "github-markdown-css";
   import { assetForExtension, assetForPlatform, formats, type Platform } from "$lib/assets";
   import Button from "@smui/button";
   import Card from "@smui/card";
@@ -97,6 +100,26 @@
     sources.filter((source) => source.repo.toLowerCase().includes(filter.trim().toLowerCase())),
   );
   const selectedSource = $derived(sources.find((source) => source.id === selectedSourceId));
+
+  const renderedReleaseNotes = $derived.by(() => {
+    const notes = selectedSource?.releaseNotes;
+    return notes?.trim() ? DOMPurify.sanitize(marked.parse(notes, { async: false })) : "";
+  });
+
+  function releaseNoteLinkOpener(node: HTMLElement): { destroy(): void } {
+    function handleClick(event: MouseEvent): void {
+      const anchor = event.target instanceof Element ? event.target.closest("a") : null;
+      if (!anchor) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const href = anchor.getAttribute("href") ?? "";
+      if (/^https?:\/\//i.test(href)) {
+        openUrl(href).catch(() => {});
+      }
+    }
+    node.addEventListener("click", handleClick, true);
+    return { destroy() { node.removeEventListener("click", handleClick, true); } };
+  }
   const platformName = $derived(
     platform
       ? `${platform.os === "macos" ? "macOS" : platform.os} · ${platform.arch}`
@@ -1005,7 +1028,7 @@
               <div class="detail-section-label">Release notes</div>
               <h2>What’s new in {selectedSource.version}</h2>
               {#if selectedSource.releaseNotes?.trim()}
-                <div class="release-notes-content">{selectedSource.releaseNotes}</div>
+                <div class="release-notes-content markdown-body" use:releaseNoteLinkOpener>{@html renderedReleaseNotes}</div>
               {:else}
                 <p class="release-notes-empty">No release notes were provided for this release.</p>
               {/if}
@@ -1305,7 +1328,6 @@
   .list-heading > div { display: flex; align-items: baseline; gap: 10px; }
   h2 { margin: 0; color: #302f3b; font-size: 15px; font-weight: 690; letter-spacing: -.2px; }
   .list-count { color: #a09faa; font-size: 11px; }
-  /* Material linear progress indicator (indeterminate) shown while a check for updates is running. */
   .linear-progress {
     position: absolute;
     right: 0;
@@ -1346,8 +1368,6 @@
     44.15% { animation-timing-function: cubic-bezier(.257759, -.003163, .211762, 1.38179); transform: scaleX(.72796); }
     100% { transform: scaleX(.08); }
   }
-  /* Download/install/update progress in the source card; determinate when the
-     server publishes a total size, indeterminate otherwise. */
   .operation-progress { display: grid; gap: 7px; margin-top: 14px; }
   .operation-progress-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
   .operation-progress-label { color: var(--text, #24212a); font-size: 13px; font-weight: 560; }
@@ -1429,7 +1449,24 @@
   .release-card { padding: 23px 24px; }
   .release-notes-card { padding: 21px 24px; }
   .release-notes-card h2 { margin: 0; color: var(--text, #24212a); font-size: 17px; font-weight: 500; }
-  .release-notes-content { max-height: 360px; margin-top: 12px; overflow: auto; color: var(--muted, #56515d); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .release-notes-content { max-height: 360px; margin-top: 12px; overflow: auto; overflow-wrap: anywhere; }
+  .release-notes-content.markdown-body {
+    min-width: 0;
+    max-width: none;
+    padding: 0;
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.6;
+    --fgColor-default: var(--text, #24212a);
+    --fgColor-muted: var(--muted, #56515d);
+    --fgColor-accent: var(--accent-strong, #60427f);
+    --borderColor-default: var(--border, #e9e0ec);
+    --borderColor-muted: var(--border, #e9e0ec);
+    --bgColor-default: transparent;
+    --bgColor-muted: var(--surface-raised, #fffaff);
+    --bgColor-neutral-muted: var(--surface-muted, #eee7f0);
+  }
+  .release-notes-content :global(img) { border-radius: 9px; }
   .release-notes-empty { margin: 12px 0 0; color: var(--subtle, #817b87); font-size: 13px; }
   .detail-section-label { margin-bottom: 8px; color: var(--subtle, #817b87); font-size: 12px; }
   .detail-release h2 { margin: 0; color: var(--text, #24212a); font-size: 20px; font-weight: 500; }
