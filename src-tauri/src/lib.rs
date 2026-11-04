@@ -9,6 +9,7 @@ use tauri::menu::Submenu;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    webview::PageLoadEvent,
     Emitter, Manager,
 };
 use tauri_plugin_autostart::MacosLauncher;
@@ -91,6 +92,17 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             None,
         ))
+        .on_page_load(|webview, payload| {
+            if webview.label() != "main" || !matches!(payload.event(), PageLoadEvent::Finished) {
+                return;
+            }
+            let window = webview.window();
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+            #[cfg(target_os = "macos")]
+            let _ = webview.app_handle().set_dock_visibility(true);
+        })
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
