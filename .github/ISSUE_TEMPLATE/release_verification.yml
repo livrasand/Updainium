@@ -1,0 +1,27 @@
+name: 🔬 Release verification
+description: Issue where the manual Verify cycle (build, screenshots and authorization) is recorded before publishing a new release.
+labels:
+  - to check
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Verifying a new release with Updainium
+
+        A maintainer runs the **Verify** workflow on this issue: it builds the
+        app for macOS, Linux and Windows, launches it on each of them and takes
+        a screenshot as evidence. When **all three platforms pass**, this issue
+        gets the **verified** label, which is the authorization needed before
+        the release is published.
+
+  - type: textarea
+    id: release_notes
+    attributes:
+      label: What is being verified
+      description: What does this release bring that needs to be checked before publishing?
+      placeholder: |
+        - [x] New source
+        - [x] Feature
+        - [x] Bug fix
+    validations:
+      required: true

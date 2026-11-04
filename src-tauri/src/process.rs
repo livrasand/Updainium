@@ -1,16 +1,3 @@
-//! Process state detection, graceful quitting, and relaunching for apps the
-//! user updates through Updainium (issue #31).
-//!
-//! Rules baked into this module:
-//! - Only the exact matching app is touched; unrelated processes are ignored.
-//! - Nothing is ever force-terminated: macOS quits via Apple events (falling
-//!   back to SIGTERM), Linux sends SIGTERM, and Windows asks apps to close
-//!   their windows via `CloseMainWindow()`.
-//! - When the app refuses to exit within [`platform::QUIT_TIMEOUT`] the caller
-//!   aborts the update instead of proceeding with a partially closed app.
-//! - Updainium never automates its own close or relaunch; the frontend keeps
-//!   a manual workflow for that case.
-
 use serde::Serialize;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -23,9 +10,7 @@ pub struct RunningAppState {
     pub is_self: bool,
 }
 
-/// How long to wait for the app to exit gracefully before giving up.
 const QUIT_TIMEOUT: Duration = Duration::from_secs(15);
-/// Poll interval while waiting for the app to exit gracefully.
 const QUIT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 pub fn validate_process_name(app_name: &str) -> Result<String, String> {
@@ -48,7 +33,6 @@ pub fn validate_launch_path(launch_path: &str) -> Result<String, String> {
     Ok(path.to_owned())
 }
 
-/// Pure identity check so self-updates never automate themselves out of sync.
 fn is_self_identity(
     own_identifier: &str,
     own_name: &str,
@@ -64,7 +48,6 @@ fn is_self_identity(
     !own.is_empty() && requested_name.trim().eq_ignore_ascii_case(own)
 }
 
-/// Keeps track of the graceful-close budget so wait loops stay short.
 struct TimeBudget {
     deadline: Instant,
 }
@@ -246,12 +229,8 @@ fn reopen_app(
     Err("Relaunching apps is not supported on this operating system.".into())
 }
 
-// ---------------------------------------------------------------------------
-// Pure helpers shared by every platform implementation.
-
 pub type PsProcess = (u32, String);
 
-/// Parses `ps axww -o pid=,command=` output rows.
 fn parse_ps_rows(output: &str) -> Vec<PsProcess> {
     output
         .lines()
@@ -263,30 +242,24 @@ fn parse_ps_rows(output: &str) -> Vec<PsProcess> {
         .collect()
 }
 
-/// Returns true when `command` runs inside `bundle_path/Contents/`.
 fn bundle_matches_command(command: &str, bundle_path: &str) -> bool {
     command
         .to_lowercase()
         .contains(&format!("{}/Contents/", bundle_path.trim_end_matches('/')).to_lowercase())
 }
 
-/// Extracts the outermost `.app` path from a command line such as an Electron
-/// helper: `/Applications/Foo.app/Contents/Frameworks/Foo Helper.app/Contents/…`
 fn bundle_from_command(command: &str) -> Option<String> {
     let haystack = command.to_lowercase();
     let index = haystack.find(".app/contents")? + ".app".len();
-    // The path starts at the first separator that is not part of the marker.
     let start = haystack[..index].find('/')?;
     Some(command[start..index].to_owned())
 }
 
-/// Escapes a string for a single-quoted PowerShell string literal.
 #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
 fn powershell_single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-/// Parses the `pid|Path` rows emitted by the Windows helper scripts.
 #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
 fn windows_rows_from_output(output: &str) -> Vec<PsProcess> {
     output
@@ -299,7 +272,6 @@ fn windows_rows_from_output(output: &str) -> Vec<PsProcess> {
         .collect()
 }
 
-/// Extracts the EXE basename from a Windows path such as `C:\Apps\Foo.exe`.
 #[cfg_attr(not(test), allow(dead_code))]
 fn windows_exe_basename(path: &str) -> String {
     path.rsplit(['\\', '/'])
@@ -344,7 +316,12 @@ mod tests {
             "Updainium",
             Some("com.livrasand.updainium")
         ));
-        assert!(is_self_identity("com.other", "updainium", " Updainium ", None));
+        assert!(is_self_identity(
+            "com.other",
+            "updainium",
+            " Updainium ",
+            None
+        ));
         assert!(!is_self_identity(
             "com.livrasand.updainium",
             "updainium",
@@ -356,13 +333,15 @@ mod tests {
 
     #[test]
     fn parse_ps_rows_reads_pid_and_command() {
-        let rows = parse_ps_rows(
-            "  123 /Applications/Foo.app/Contents/MacOS/Foo\n1   /usr/bin/x -y\n",
-        );
+        let rows =
+            parse_ps_rows("  123 /Applications/Foo.app/Contents/MacOS/Foo\n1   /usr/bin/x -y\n");
         assert_eq!(
             rows,
             vec![
-                (123_u32, "/Applications/Foo.app/Contents/MacOS/Foo".to_owned()),
+                (
+                    123_u32,
+                    "/Applications/Foo.app/Contents/MacOS/Foo".to_owned()
+                ),
                 (1_u32, "/usr/bin/x -y".to_owned()),
             ]
         );
@@ -377,7 +356,10 @@ mod tests {
             "/applications/FOO.app/Contents/MacOS/FOO --flag",
             "/Applications/Foo.app",
         ));
-        assert!(!bundle_matches_command("/usr/bin/other", "/Applications/Foo.app"));
+        assert!(!bundle_matches_command(
+            "/usr/bin/other",
+            "/Applications/Foo.app"
+        ));
     }
 
     #[test]
@@ -459,7 +441,8 @@ mod platform {
             if let Ok(entries) = std::fs::read_dir(&root) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().and_then(|ext| ext.to_str()) != Some("app") || !path.is_dir()
+                    if path.extension().and_then(|ext| ext.to_str()) != Some("app")
+                        || !path.is_dir()
                     {
                         continue;
                     }
@@ -493,8 +476,6 @@ mod platform {
             .collect()
     }
 
-    /// Detects running processes only by bundle location; name-only heuristics
-    /// would risk touching unrelated processes.
     fn detect(app_name: &str, app_identifier: Option<&str>) -> Result<MacosState, String> {
         let bundles = bundle_candidates(app_name, app_identifier);
         let mut running = false;
@@ -565,10 +546,9 @@ mod platform {
             })
             .or_else(|| app_identifier.map(str::to_owned));
         if let Some(identifier) = bundle_identifier.take() {
-            if identifier
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || " .-_{}+~:@".contains(character))
-            {
+            if identifier.chars().all(|character| {
+                character.is_ascii_alphanumeric() || " .-_{}+~:@".contains(character)
+            }) {
                 let quit = Command::new("osascript")
                     .arg("-e")
                     .arg(format!("tell application id \"{identifier}\" to quit"))
@@ -625,7 +605,9 @@ mod platform {
             .map(str::to_owned)
             .or_else(|| {
                 app_identifier.and_then(|identifier| {
-                    bundle_candidates_from_identifier(identifier).into_iter().next()
+                    bundle_candidates_from_identifier(identifier)
+                        .into_iter()
+                        .next()
                 })
             })
             .ok_or_else(|| {
@@ -680,7 +662,6 @@ mod platform {
         names
     }
 
-    /// Runs a PowerShell snippet through stdin so quoting stays unambiguous.
     fn run_powershell(script: &str) -> Result<String, String> {
         let mut child = Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", "-"])
@@ -712,8 +693,6 @@ mod platform {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
-    /// Lists (pid, executable path) rows for the running app; an empty list
-    /// means the app is not running.
     fn running_rows(process_name: &str) -> Result<Vec<PsProcess>, String> {
         let names = process_names(process_name)
             .into_iter()
@@ -782,8 +761,6 @@ mod platform {
         }
     }
 
-    /// Resolves the app's EXE from the uninstall registry (`DisplayIcon`) so a
-    /// relaunch works even when the remembered path no longer exists.
     fn registry_launch_path(app_identifier: Option<&str>) -> Option<String> {
         let identifier = app_identifier?;
         for root in REGISTRY_UNINSTALL_ROOTS {
@@ -871,15 +848,14 @@ mod platform {
             .to_owned()
     }
 
-    /// Scans /proc so detection does not depend on pgrep's 15-char name limit.
     fn detect(process_name: &str) -> Result<LinuxState, String> {
         let wanted = process_name.trim().to_ascii_lowercase();
         let own_pid = std::process::id();
         let mut running = false;
         let mut launch_path = None;
         let mut pids = Vec::new();
-        let entries =
-            std::fs::read_dir("/proc").map_err(|error| format!("Could not read /proc to find running apps: {error}"))?;
+        let entries = std::fs::read_dir("/proc")
+            .map_err(|error| format!("Could not read /proc to find running apps: {error}"))?;
         for entry in entries.flatten() {
             let file_name = entry.file_name();
             let Ok(pid) = file_name.to_string_lossy().parse::<u32>() else {
@@ -891,9 +867,7 @@ mod platform {
             }
             let argv0 = std::fs::read_to_string(format!("/proc/{pid}/cmdline"))
                 .ok()
-                .and_then(|cmdline| {
-                    cmdline.split('\0').next().map(|command| command.to_owned())
-                });
+                .and_then(|cmdline| cmdline.split('\0').next().map(|command| command.to_owned()));
             let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
             let mut candidates: Vec<String> = argv0
                 .as_deref()
@@ -901,7 +875,10 @@ mod platform {
                 .into_iter()
                 .collect();
             if let Some(path) = exe.as_deref() {
-                if let Some(basename) = path.to_str().and_then(|path| path.rsplit('/').next().map(str::to_owned)) {
+                if let Some(basename) = path
+                    .to_str()
+                    .and_then(|path| path.rsplit('/').next().map(str::to_owned))
+                {
                     candidates.push(basename);
                 }
             }
@@ -912,7 +889,10 @@ mod platform {
                 running = true;
                 pids.push(pid);
                 if launch_path.is_none() {
-                    launch_path = exe.as_deref().and_then(|path| path.to_str()).map(str::to_owned);
+                    launch_path = exe
+                        .as_deref()
+                        .and_then(|path| path.to_str())
+                        .map(str::to_owned);
                 }
             }
         }
@@ -971,8 +951,6 @@ mod platform {
         (!path.is_empty()).then_some(path)
     }
 
-    /// Spawns the app detached from Updainium so closing the updater never
-    /// takes the relaunched app down with it.
     fn spawn_detached(path: &str) -> Result<bool, String> {
         let mut child = Command::new(path)
             .process_group(0)

@@ -1,0 +1,264 @@
+# Verifies that Updainium builds and launches on macOS, Linux and Windows,
+# and posts the evidence (screenshots) as a comment on the issue given in the
+# input. It only runs when a maintainer dispatches it manually; pushes and
+# pulls never trigger it, and there is no parallel PR-comment workflow from it.
+#
+# When all three platforms pass, the issue gets the "verified" label. The
+# "Publish release" workflow requires that label on the given issue, so
+# releasing is authorized by this run on the issue it posted to.
+
+name: Verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue whose comment gets the evidence; must be open (and has the verified label when everything passes)'
+        required: true
+        type: string
+
+concurrency:
+  group: verify-${{ inputs.issue_number }}
+  cancel-in-progress: true
+
+env:
+  DISPLAY: ':99' # Linux: Xvfb is started on this display
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    name: Build, launch and screenshot (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            bundles: appimage
+          - os: macos-latest
+            bundles: dmg
+          - os: windows-latest
+            bundles: nsis
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      APP_NAME: updaitium
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev \
+            libayatana-appindicator3-dev libwebkit2gtk-4.1-dev patchelf \
+            xvfb imagemagick libwebkit2gtk-4.1-0 libayatana-appindicator3-1 xdg-user-dirs 'libasound2'
+
+      - name: Build
+        run: |
+          npm ci
+          npm run tauri -- build --bundles ${{ matrix.bundles }}
+
+      # --- Evidence: launch the built app and capture the screen -----------
+
+      - name: Launch and screenshot (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          : > .verify
+          mkdir evidence
+          export XDG_RUNTIME_DIR=/tmp/xdg
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 0700 "$XDG_RUNTIME_DIR"
+          Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
+          sleep 2
+          export DISPLAY=:99
+          ./src-tauri/target/release/updaitium >/dev/null 2>&1 &
+          APP_PID=$!
+          sleep 20 # give the window time to show
+          import -window root -density 96 evidence/screenshot-linux.png
+          kill "$APP_PID" 2>/dev/null || true
+          wait "$APP_PID" 2>/dev/null || true
+          test -s evidence/screenshot-linux.png && echo linux=ok >> .verify
+
+      - name: Launch and screenshot (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APP: ./src-tauri/target/release/bundle/macos/Updainium.app
+        run: |
+          : > .verify
+          mkdir evidence
+          codesign --force --deep -s - "$APP"
+          open "$APP"
+          sleep 20 # give the window time to show
+          screencapture -x evidence/screenshot-macos.png
+          osascript -e 'tell application "System Events" to get name of processes' >/dev/null || true
+          pkill "updaitium" 2>/dev/null || true
+          test -s evidence/screenshot-macos.png && echo macos=ok >> .verify
+
+      - name: Launch and screenshot (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          APP_EXE: src-tauri/target/release/updaitium.exe
+        run: |
+          New-Item -ItemType Directory -Force -Path evidence | Out-Null
+          "" | Out-File -FilePath .verify -Encoding ascii
+          Start-Process $env:APP_EXE -RedirectStandardError app.err
+          Start-Sleep -Seconds 20 # give the window time to show
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+          $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+          $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+          $bmp.Save("evidence/screenshot-windows.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          Get-Process -Name 'updaitium' -ErrorAction SilentlyContinue | Stop-Process
+          if ((Get-Item evidence/screenshot-windows.png).Length -gt 0) { "windows=ok" | Out-File -Append -Encoding ascii .verify }
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-evidence-${{ runner.os }}
+          path: |
+            evidence/
+            .verify
+          retention-days: 7
+
+  # One comment on the issue using the same marker every time, updated on
+  # re-runs. Screenshots have to come from an asset in a (prerelease)
+  # ci-screenshots release: no GITHUB_TOKEN-based attachment upload exists.
+  report:
+    name: Post the evidence on the issue
+    needs: verify
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # download the artifacts
+      contents: write # upload screenshots to the ci-screenshots release
+      issues: write # comment there, add the verified label
+    env:
+      ISSUE: ${{ inputs.issue_number }}
+      GH_TOKEN: ${{ github.token }}
+      MARKER: '<!-- updainium-verify-evidence -->'
+    steps:
+      - name: Download the evidence artifacts
+        run: |
+          mkdir out
+          if ! gh run download "$RUN_ID" -R "$REPO" -D "out" ; then
+            echo "The test did not get far enough to leave evidence."
+            exit 1
+          fi
+        env:
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+
+      - name: Check that the issue exists and is open
+        run: |
+          gh issue view "$ISSUE" -R "$REPO" --json state --jq .state
+          gh issue view "$ISSUE" -R "$REPO" --json state --jq .state | grep -xq open || {
+            echo "Issue $ISSUE is not open on $REPO; not reporting."; exit 1; }
+        env:
+          REPO: ${{ github.repository }}
+
+      - name: Upload the screenshots to the ci-screenshots release
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          : > images.txt
+          gh release view ci-screenshots -R "$REPO" >/dev/null 2>&1 || \
+            gh release create ci-screenshots -R "$REPO" --prerelease \
+              -t "CI screenshots" -n "Updainium verification screenshots, used in issues"
+
+          shopt -s nullglob
+          for f in out/*/evidence/screenshot-*.png; do
+            [ -f "$f" ] || continue
+            base="$(basename "$f" .png)"
+            case "$base" in
+              screenshot-macos)   os=macos ;;
+              screenshot-linux)   os=linux ;;
+              screenshot-windows) os=windows ;;
+              *)                  os="${base#screenshot-}" ;;
+            esac
+            mime="$(file -b --mime-type "$f")"
+            [[ "$mime" == image/png ]] || continue
+            name="verify-${ISSUE}-${GITHUB_RUN_ID:0:8}-${base}.png"
+            cp "$f" "$name"
+            gh release upload ci-screenshots -R "$REPO" "$name" --clobber
+            url="https://github.com/$REPO/releases/download/ci-screenshots/$name"
+            echo -e "${os}\t${url}" >> images.txt
+          done
+          cat images.txt
+
+      - name: Compose the comment and update the issue
+        run: |
+          set -euo pipefail
+
+          status() {
+            local os_key="$1"
+            local art="$2"
+            local f="out/${art}/.verify"
+            if [[ -f "$f" ]] && grep -q "^${os_key}=ok$" "$f"; then
+              echo '✔️ funciona'
+            else
+              echo '❌ no funcionó — revisa el log'
+            fi
+          }
+
+          {
+            echo "$MARKER"
+            echo '## 🔬 Evidencia de verificación (Updainium — macOS, Linux, Windows)'
+            echo
+            echo "| Plataforma | Resultado |"
+            echo "|------------|-----------|"
+            echo "| macOS      | $(status macos verify-evidence-macOS) |"
+            echo "| Linux      | $(status linux verify-evidence-Linux) |"
+            echo "| Windows    | $(status windows verify-evidence-Windows) |"
+            echo
+            if [[ -s images.txt ]]; then
+              while IFS=$'\t' read -r os url; do
+                [[ -z "${os:-}" || -z "${url:-}" ]] && continue
+                case "$os" in
+                  osx|macos) TITLE='macOS' ;;
+                  linux)     TITLE='Linux' ;;
+                  windows)   TITLE='Windows' ;;
+                  *)         TITLE="Captura de verificación (${os})" ;;
+                esac
+                echo "### $TITLE"
+                echo
+                echo "![Captura de verificación en $TITLE]($url)"
+                echo
+              done < images.txt
+            fi
+            echo "[Log completo de la verificación](${RUN_URL})"
+          } > comment.md
+
+          cat comment.md
+
+          gh issue comment "$ISSUE" -R "$REPO" --edit-last --create-if-new --body-file comment.md
+
+          if [[ -f out/verify-evidence-macOS/.verify ]] && grep -q '^macos=ok$' out/verify-evidence-macOS/.verify && \
+             [[ -f out/verify-evidence-Linux/.verify ]] && grep -q '^linux=ok$'  out/verify-evidence-Linux/.verify  && \
+             [[ -f out/verify-evidence-Windows/.verify ]] && grep -q '^windows=ok$' out/verify-evidence-Windows/.verify; then
+            gh label create verified -R "$REPO" --color 0e8a16 --description "Verificado en macOS, Linux y Windows" 2>/dev/null || true
+            gh issue edit "$ISSUE" -R "$REPO" --add-label verified
+            echo "Autorizado: issue #$ISSUE etiquetado como verified. Ya se puede lanzar 'Publish release'."
+          else
+            echo "Faltan alguna plataforma por pasar. No se añade la etiqueta verified."
+          fi
+        env:
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
