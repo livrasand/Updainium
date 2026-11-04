@@ -27,6 +27,6 @@ jobs:
           if [[ "$permission" != "admin" && "$permission" != "maintain" ]]; then
             gh issue close "$ISSUE_NUMBER" \
               --repo "$REPOSITORY" \
-              --reason "not_planned" \
+              --reason "not planned" \
               --comment "This issue is reserved for repository maintainers."
           fi
