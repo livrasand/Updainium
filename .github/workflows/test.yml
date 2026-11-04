@@ -181,15 +181,16 @@ jobs:
         env:
           REPO: ${{ github.repository }}
 
-      - name: Upload the screenshots to the ci-screenshots release
+      - name: Upload the screenshots to a per-run release
         env:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           : > images.txt
-          gh release view ci-screenshots -R "$REPO" >/dev/null 2>&1 || \
-            gh release create ci-screenshots -R "$REPO" --prerelease \
-              -t "CI screenshots" -n "Updainium verification screenshots, used in issues"
+          RELEASE_TAG="ci-screenshots-${ISSUE}-${GITHUB_RUN_ID}"
+          gh release create "$RELEASE_TAG" -R "$REPO" --draft \
+            -t "CI screenshots (run ${GITHUB_RUN_ID})" \
+            -n "Updainium verification screenshots, used in issues" >/dev/null
 
           shopt -s nullglob
           for f in out/*/evidence/screenshot-*.png; do
@@ -205,10 +206,15 @@ jobs:
             [[ "$mime" == image/png ]] || continue
             name="verify-${ISSUE}-${GITHUB_RUN_ID:0:8}-${base}.png"
             cp "$f" "$name"
-            gh release upload ci-screenshots -R "$REPO" "$name" --clobber
-            url="https://github.com/$REPO/releases/download/ci-screenshots/$name"
+            gh release upload "$RELEASE_TAG" -R "$REPO" "$name"
+            url="https://github.com/$REPO/releases/download/${RELEASE_TAG}/${name}"
             echo -e "${os}\t${url}" >> images.txt
           done
+
+          # Publish the draft so asset URLs are publicly accessible from the issue.
+          RELEASE_ID="$(gh release view "$RELEASE_TAG" -R "$REPO" --json id -q .id)"
+          gh api -X PATCH "repos/${REPO}/releases/${RELEASE_ID}" -f draft=false >/dev/null
+
           cat images.txt
 
       - name: Compose the comment and update the issue
