@@ -6,10 +6,10 @@
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
   import { openPath } from "@tauri-apps/plugin-opener";
+  import { assetForExtension, assetForPlatform, formats, type Platform } from "$lib/assets";
   import Button from "@smui/button";
   import Card from "@smui/card";
 
-  type Platform = { os: string; arch: string };
   type Architecture = "auto" | "x86_64" | "aarch64" | "x86" | "arm";
   type ReleaseAsset = { name: string; browser_download_url: string; sha256?: string | null };
   type Release = {
@@ -58,17 +58,6 @@
     { value: "x86", label: "x86 / i686 (Intel 32-bit)" },
     { value: "arm", label: "ARMv7 / ARMHF (ARM 32-bit)" },
   ];
-  const archAliases: Record<string, string[]> = {
-    x86_64: ["x86_64", "amd64", "x64"],
-    aarch64: ["aarch64", "arm64", "armv8"],
-    x86: ["i386", "i686", "x86"],
-    arm: ["armv7", "armhf", "arm"],
-  };
-  const formats: Record<string, string[]> = {
-    windows: [".msi", ".exe"],
-    macos: [".dmg", ".pkg"],
-    linux: [".appimage", ".deb", ".rpm"],
-  };
   const osLabels: Record<string, string> = {
     windows: "Windows",
     macos: "macOS",
@@ -281,62 +270,6 @@
     return { repo: `${hostname}/${repositoryPath}`, url, repositoryPath, provider };
   }
 
-  function assetForPlatform(assets: ReleaseAsset[]): ReleaseAsset | undefined {
-    if (!platform) return undefined;
-    const extensions = formats[platform.os];
-    if (!extensions) return undefined;
-    const aliases = archAliases[platform.arch] ?? [platform.arch];
-    const allAliases = Object.values(archAliases).flat();
-    const candidates = assets.flatMap((asset) => {
-      const name = asset.name.toLowerCase();
-      const extensionRank = extensions.findIndex((extension) => name.endsWith(extension));
-      if (extensionRank < 0) return [];
-      const hasArchitecture = allAliases.some((alias) =>
-        new RegExp(`(^|[^a-z0-9])${alias}($|[^a-z0-9_])`, "i").test(name),
-      );
-      const matchesArchitecture =
-        !hasArchitecture ||
-        aliases.some((alias) =>
-          new RegExp(`(^|[^a-z0-9])${alias}($|[^a-z0-9_])`, "i").test(name),
-        ) ||
-        /(^|[^a-z0-9])universal2?($|[^a-z0-9_])/i.test(name);
-      return matchesArchitecture ? [{ asset, extensionRank, specificity: hasArchitecture ? 0 : 1 }] : [];
-    });
-    candidates.sort(
-      (left, right) =>
-        left.extensionRank - right.extensionRank || left.specificity - right.specificity,
-    );
-    return candidates[0]?.asset;
-  }
-
-  function assetForExtension(
-    assets: ReleaseAsset[],
-    extension: string,
-    architecture: Architecture,
-  ): ReleaseAsset | undefined {
-    const normalizedExtension = extension.toLowerCase();
-    const selectedArchitecture = architecture === "auto" ? platform?.arch : architecture;
-    const aliases = selectedArchitecture
-      ? archAliases[selectedArchitecture] ?? [selectedArchitecture]
-      : [];
-    const allAliases = Object.values(archAliases).flat();
-    const candidates = assets.flatMap((asset) => {
-      const name = asset.name.toLowerCase();
-      if (!name.endsWith(normalizedExtension)) return [];
-      const hasArchitecture = allAliases.some((alias) =>
-        new RegExp(`(^|[^a-z0-9])${alias}($|[^a-z0-9_])`, "i").test(name),
-      );
-      const matchesArchitecture = aliases.some((alias) =>
-        new RegExp(`(^|[^a-z0-9])${alias}($|[^a-z0-9_])`, "i").test(name),
-      );
-      const universal = /(^|[^a-z0-9])universal2?($|[^a-z0-9_])/i.test(name);
-      if (hasArchitecture && !matchesArchitecture && !universal) return [];
-      return [{ asset, specificity: matchesArchitecture ? 0 : universal ? 1 : 2 }];
-    });
-    candidates.sort((left, right) => left.specificity - right.specificity);
-    return candidates[0]?.asset;
-  }
-
   async function checkSource(id: string): Promise<void> {
     const source = sources.find((item) => item.id === id);
     if (!source || !platform || checking.includes(id)) return;
@@ -378,13 +311,17 @@
                 `${origin}/api/v4/projects/${encodeURIComponent(reference.repositoryPath)}/releases/permalink/latest`,
               ];
       const release = await invoke<Release>("fetch_release_metadata", { apiUrls });
-      const asset = source.assetExtension
-        ? assetForExtension(
-            release.assets ?? [],
-            source.assetExtension,
-            source.assetArchitecture ?? "auto",
-          )
-        : assetForPlatform(release.assets ?? []);
+      const assets = release.assets ?? [];
+      const asset = platform
+        ? source.assetExtension
+          ? assetForExtension(
+              assets,
+              source.assetExtension,
+              source.assetArchitecture ?? "auto",
+              platform,
+            )
+          : assetForPlatform(assets, platform)
+        : undefined;
       if (!asset) {
         if (source.assetExtension) {
           const architecture = source.assetArchitecture ?? "auto";
@@ -413,8 +350,12 @@
             `No release asset ends with ${source.assetExtension} for ${architectureLabel}.${availableLabel}${platformHint}`,
           );
         }
-        const supported = formats[platform.os]?.join(", ") ?? "no compatible formats";
-        throw new Error(`No installer compatible with ${platform.os} ${platform.arch}. Supported formats: ${supported}.`);
+        const supported = formats[platform.os]?.join(", ") ?? "no known formats";
+        throw new Error(
+          `No release asset matched ${platform.os} ${platform.arch} automatically. ` +
+            `Preferred formats: ${supported}. To follow a specific file — including one without an ` +
+            `extension that could not be identified automatically — set its extension when adding the app.`,
+        );
       }
       sources = sources.map((item) =>
         item.id === id
@@ -516,10 +457,12 @@
           : `.${extensionInput}`
         : "";
       if (
-        (extension && !/^\.[a-z0-9]+(?:\.[a-z0-9]+)*$/i.test(extension)) ||
-        (!extension && (!editingSourceId || currentSource?.assetExtension))
+        extension &&
+        !/^\.[a-z0-9]+(?:\.[a-z0-9]+)*$/i.test(extension)
       ) {
-        throw new Error("Enter a valid file extension, such as .AppImage or .zip.");
+        throw new Error(
+          "Enter a valid file extension, such as .AppImage or .zip, or leave the field empty to match the release automatically.",
+        );
       }
       if (
         sources.some(
@@ -964,7 +907,7 @@
             <p class="app-file-hint">Or drag the installed app, executable, or package-owned file here.</p>
             <label class="add-field">
               <span class="visually-hidden">File extension</span>
-              <input bind:value={sourceExtension} placeholder="File extension, e.g. .AppImage or .zip" type="text" required={!editingSourceId || Boolean(sources.find((source) => source.id === editingSourceId)?.assetExtension)} />
+              <input bind:value={sourceExtension} placeholder="File extension (optional), e.g. .AppImage or .zip" type="text" />
               <span class="field-symbol" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 4.5 4.5"></path></svg>
               </span>
@@ -978,7 +921,7 @@
               </select>
             </label>
             {#if formError}<p class="form-error" role="alert">{formError}</p>{/if}
-            <p class="add-hint">The latest release will be checked for the chosen extension and architecture. The identifier must match the app bundle, package, or uninstall registry entry on this device.</p>
+            <p class="add-hint">The latest release will be checked for the chosen extension and architecture, or matched to this platform automatically — including extensionless executables such as frankenphp-linux-x86_64 — when no extension is set. The identifier must match the app bundle, package, or uninstall registry entry on this device.</p>
             <div class="add-actions">
               <button class="back-link" type="button" onclick={() => { showAddSection = false; editingSourceId = null; }}>Cancel</button>
               <Button class="primary-button" variant="unelevated" type="submit" disabled={adding}>
