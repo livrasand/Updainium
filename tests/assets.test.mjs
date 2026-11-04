@@ -96,7 +96,6 @@ test("explicit extension filtering keeps matching the requested file", () => {
   ];
   assert.equal(assetForExtension(assets, ".zip", "x86_64", linux), assets[2]);
   assert.equal(assetForExtension(assets, ".zip", "auto", linux), assets[2]);
-  // Existing behavior: assets without an architecture hint are less specific, not rejected.
   assert.equal(assetForExtension(assets, ".zip", "aarch64", linux), assets[1]);
   assert.equal(assetForExtension(assets, "app-1.2.3.zip", "auto", linux), assets[1]);
   assert.equal(nameOf(assetForExtension(assets, ".exe", "auto", linux)), "app-setup.exe");
