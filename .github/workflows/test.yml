@@ -176,7 +176,7 @@ jobs:
       - name: Check that the issue exists and is open
         run: |
           gh issue view "$ISSUE" -R "$REPO" --json state --jq .state
-          gh issue view "$ISSUE" -R "$REPO" --json state --jq .state | grep -xq open || {
+          gh issue view "$ISSUE" -R "$REPO" --json state --jq .state | grep -xiq open || {
             echo "Issue $ISSUE is not open on $REPO; not reporting."; exit 1; }
         env:
           REPO: ${{ github.repository }}
