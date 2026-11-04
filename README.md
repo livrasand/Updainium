@@ -43,6 +43,8 @@ We promise:
 > [!IMPORTANT]
 > **macOS Users:** You may see a warning that Apple cannot verify Updainium. This happens because the app is distributed outside the App Store and is not notarized yet. Allow it via System Settings → Privacy & Security → Open Anyway.
 
+> **Linux Users:** Updainium disables WebKitGTK's DMABUF renderer by default because it can display horizontal rendering artifacts on some distributions and GPU drivers (e.g. Debian 13). If it is already set in your environment, Updainium keeps your value, and you can re-enable it yourself with `WEBKIT_DISABLE_DMABUF_RENDERER=0` or disable hardware compositing entirely with `WEBKIT_DISABLE_COMPOSITING_MODE=1`. The harmless `Gtk-Message: Failed to load module "canberra-gtk3-module"` terminal message can be silenced by installing your distribution's `libcanberra-gtk3` package and is unrelated to rendering.
+
 
 ## Limitations
 - For some sources that lack standardized APIs, Updainium gathers data using web scraping. This means tracking can occasionally break if the source website changes its design. In these specific edge cases, more reliable methods may temporarily be unavailable. See [LEGAL.md](LEGAL.md): users are responsible for evaluating the software they choose to download and run.

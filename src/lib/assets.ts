@@ -99,8 +99,6 @@ export function assetForPlatform(assets: ReleaseAsset[], platform: Platform): Re
     return keywordCandidates[0].asset;
   }
 
-  // Last resort: a lone asset without any extension and without contradicting
-  // signals is unambiguous and can be followed automatically.
   const loneAsset = assets.length === 1 ? assets[0] : undefined;
   if (
     loneAsset &&

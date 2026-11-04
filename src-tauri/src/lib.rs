@@ -1,17 +1,17 @@
-use std::{fs, io::Write, process::Command};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+use std::{fs, io::Write, process::Command};
 mod backup;
 mod github;
 use sha2::{Digest, Sha256};
+#[cfg(not(target_os = "macos"))]
+use tauri::menu::Submenu;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager,
 };
 use tauri_plugin_autostart::MacosLauncher;
-#[cfg(not(target_os = "macos"))]
-use tauri::menu::Submenu;
 
 #[derive(serde::Serialize)]
 struct Platform {
@@ -69,14 +69,28 @@ fn emit_download_progress(
     );
 }
 
+#[cfg(target_os = "linux")]
+fn prepare_linux_rendering() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn prepare_linux_rendering() {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    prepare_linux_rendering();
     tauri::Builder::default()
         .manage(github::GithubState::default())
         .manage(github::ApiTokenState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             #[cfg(target_os = "macos")]
             {
@@ -95,7 +109,10 @@ pub fn run() {
             let open = MenuItem::with_id(app, "open", "Open Updainium", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;
-            let icon = app.default_window_icon().cloned().expect("default window icon is configured");
+            let icon = app
+                .default_window_icon()
+                .cloned()
+                .expect("default window icon is configured");
 
             TrayIconBuilder::with_id("main")
                 .icon(icon)
@@ -117,7 +134,9 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
-            app.tray_by_id("main").expect("tray icon was just created").set_visible(false)?;
+            app.tray_by_id("main")
+                .expect("tray icon was just created")
+                .set_visible(false)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -264,13 +283,8 @@ fn normalize_release(payload: serde_json::Value) -> Release {
     }
 }
 
-async fn github_api_token_or_anonymous(
-    state: &github::ApiTokenState,
-) -> Option<String> {
-    github::api_token(state.clone())
-        .await
-        .ok()
-        .flatten()
+async fn github_api_token_or_anonymous(state: &github::ApiTokenState) -> Option<String> {
+    github::api_token(state.clone()).await.ok().flatten()
 }
 
 #[tauri::command]
@@ -288,13 +302,14 @@ async fn fetch_release_metadata(
     let mut transport_error: Option<String> = None;
 
     for api_url in api_urls {
-        let parsed_url = match parse_https_url(&api_url, "The release API must be reached over HTTPS.") {
-            Ok(parsed_url) => parsed_url,
-            Err(error) => {
-                transport_error = Some(error);
-                continue;
-            }
-        };
+        let parsed_url =
+            match parse_https_url(&api_url, "The release API must be reached over HTTPS.") {
+                Ok(parsed_url) => parsed_url,
+                Err(error) => {
+                    transport_error = Some(error);
+                    continue;
+                }
+            };
 
         let mut request = client
             .get(parsed_url)
@@ -331,8 +346,7 @@ async fn fetch_release_metadata(
     if not_found {
         return Err("The repository has no published releases or is not accessible.".into());
     }
-    Err(transport_error
-        .unwrap_or_else(|| "The release API could not be reached.".into()))
+    Err(transport_error.unwrap_or_else(|| "The release API could not be reached.".into()))
 }
 
 #[tauri::command]
@@ -446,7 +460,11 @@ fn unique_identifier(mut identifiers: Vec<String>) -> Option<String> {
 fn identify_macos_app_identifier_from_path(path: &std::path::Path) -> Result<String, String> {
     let app_path = path
         .ancestors()
-        .find(|ancestor| ancestor.extension().is_some_and(|extension| extension == "app"))
+        .find(|ancestor| {
+            ancestor
+                .extension()
+                .is_some_and(|extension| extension == "app")
+        })
         .ok_or_else(|| "Select an installed .app bundle or a file inside it.".to_owned())?;
     let info = app_path.join("Contents/Info.plist");
     read_macos_plist_value(
@@ -528,7 +546,10 @@ fn normalized_windows_path(path: &str) -> String {
         .rsplit_once(',')
         .filter(|(_, suffix)| suffix.trim().parse::<u32>().is_ok())
         .map_or(path, |(path, _)| path);
-    path.trim().trim_matches('"').replace('/', "\\").to_lowercase()
+    path.trim()
+        .trim_matches('"')
+        .replace('/', "\\")
+        .to_lowercase()
 }
 
 #[cfg(target_os = "linux")]
@@ -813,7 +834,8 @@ fn uninstall_macos_app(identifier: &str) -> Result<(), String> {
         }
     }
     let app_path = app_path.ok_or_else(|| {
-        "No installed app bundle matched this identifier, so it could not be uninstalled.".to_owned()
+        "No installed app bundle matched this identifier, so it could not be uninstalled."
+            .to_owned()
     })?;
 
     let script = format!("tell application \"Finder\" to delete POSIX file \"{app_path}\"");
@@ -876,10 +898,16 @@ fn uninstall_windows_app(identifier: &str) -> Result<(), String> {
 #[cfg(target_os = "linux")]
 fn uninstall_linux_app(identifier: &str) -> Result<(), String> {
     let dpkg = Command::new("dpkg-query")
-        .args(["--show", "--showformat=${db:Status-Status}", "--", identifier])
+        .args([
+            "--show",
+            "--showformat=${db:Status-Status}",
+            "--",
+            identifier,
+        ])
         .output();
     if let Ok(output) = dpkg {
-        if output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "installed" {
+        if output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "installed"
+        {
             let status = Command::new("pkexec")
                 .args(["apt-get", "remove", "-y", "--", identifier])
                 .status()
@@ -890,9 +918,7 @@ fn uninstall_linux_app(identifier: &str) -> Result<(), String> {
             return Err(format!("The package manager exited with status {status}."));
         }
     }
-    let rpm = Command::new("rpm")
-        .args(["-q", "--", identifier])
-        .output();
+    let rpm = Command::new("rpm").args(["-q", "--", identifier]).output();
     if let Ok(output) = rpm {
         if output.status.success() {
             let status = Command::new("pkexec")
@@ -1045,9 +1071,7 @@ async fn download_release_asset(
     let expected_sha256 = expected_sha256
         .map(|digest| {
             let normalized = digest.strip_prefix("sha256:").unwrap_or(&digest);
-            if normalized.len() == 64
-                && normalized.bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
+            if normalized.len() == 64 && normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 Ok(normalized.to_ascii_lowercase())
             } else {
                 Err("The published SHA-256 checksum is invalid.".to_owned())
@@ -1220,7 +1244,10 @@ mod tests {
         }));
 
         assert_eq!(release.tag_name, None);
-        assert_eq!(release.assets[0].browser_download_url, "https://gitlab.com/fallback.zip");
+        assert_eq!(
+            release.assets[0].browser_download_url,
+            "https://gitlab.com/fallback.zip"
+        );
     }
 
     #[test]
@@ -1267,7 +1294,13 @@ mod tests {
 
     #[test]
     fn returns_only_a_unique_identifier() {
-        assert_eq!(unique_identifier(vec!["app.id".into(), "app.id".into()]), Some("app.id".into()));
-        assert_eq!(unique_identifier(vec!["first".into(), "second".into()]), None);
+        assert_eq!(
+            unique_identifier(vec!["app.id".into(), "app.id".into()]),
+            Some("app.id".into())
+        );
+        assert_eq!(
+            unique_identifier(vec!["first".into(), "second".into()]),
+            None
+        );
     }
 }
