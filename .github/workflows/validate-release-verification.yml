@@ -1,0 +1,32 @@
+name: Validate release verification
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+
+jobs:
+  validate:
+    if: startsWith(github.event.issue.title, 'Release verification:')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check maintainer permissions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          AUTHOR: ${{ github.event.issue.user.login }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          permission=$(gh api \
+            "repos/$REPOSITORY/collaborators/$AUTHOR/permission" \
+            --jq '.permission' 2>/dev/null || echo "none")
+
+          if [[ "$permission" != "admin" && "$permission" != "maintain" ]]; then
+            gh issue close "$ISSUE_NUMBER" \
+              --repo "$REPOSITORY" \
+              --reason "not_planned" \
+              --comment "This issue is reserved for repository maintainers."
+          fi
