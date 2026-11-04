@@ -23,12 +23,23 @@
     assets: ReleaseAsset[];
   };
   type SourceReference = { repo: string; url: string; repositoryPath: string; provider: string };
-  type DownloadPhase = "downloading" | "verifying" | "opening";
+  type DownloadPhase = "closing" | "downloading" | "verifying" | "opening";
   type DownloadProgressEvent = {
     downloadId: string;
     phase: DownloadPhase;
     received: number;
     total: number | null;
+  };
+  type RunningAppStateEvent = {
+    running: boolean;
+    launchPath?: string | null;
+    isSelf: boolean;
+  };
+  type ResumeSession = {
+    wasRunning: boolean;
+    targetVersion: string;
+    launchPath?: string;
+    savedAt: number;
   };
   type TrackedSource = {
     id: string;
@@ -54,6 +65,7 @@
   };
 
   const storageKey = "updainium.sources.v1";
+  const resumeStorageKey = "updainium.resume.v1";
   const architectures: { value: Architecture; label: string }[] = [
     { value: "auto", label: "Automatic (this device)" },
     { value: "x86_64", label: "x86_64 / AMD64 (Intel 64-bit)" },
@@ -95,6 +107,8 @@
   let snackbarMessage = $state("");
   let snackbarOpen = $state(false);
   let snackbarTimer: ReturnType<typeof setTimeout> | undefined;
+  let resumeSessions = $state<Record<string, ResumeSession | undefined>>({});
+  let resumeLaunching = $state(false);
 
   const visibleSources = $derived(
     sources.filter((source) => source.repo.toLowerCase().includes(filter.trim().toLowerCase())),
@@ -139,7 +153,9 @@
     return null;
   });
   const downloadStatusLabel = $derived(
-    downloadProgress?.phase === "verifying"
+    downloadProgress?.phase === "closing"
+      ? "Closing the running app before the installer…"
+      : downloadProgress?.phase === "verifying"
       ? "Verifying the SHA-256 checksum…"
       : downloadProgress?.phase === "opening"
         ? "Opening the installer…"
@@ -155,10 +171,22 @@
     if (downloadProgress.phase === "opening") {
       return "The installer is ready and will now be opened.";
     }
+    if (downloadProgress.phase === "closing") {
+      return "Waiting for the app to close gracefully before continuing.";
+    }
     const received = formatBytes(downloadProgress.received);
     return downloadProgress.total && downloadProgress.total > 0
       ? `${received} of ${formatBytes(downloadProgress.total)}`
       : `${received} downloaded · total size unknown`;
+  });
+
+  $effect(() => {
+    if (!ready) return;
+    try {
+      localStorage.setItem(resumeStorageKey, JSON.stringify(resumeSessions));
+    } catch (error) {
+      appError = `Could not save the resume state: ${messageOf(error)}`;
+    }
   });
 
   onMount(async () => {
@@ -196,6 +224,7 @@
         }
         sources = parsed;
       }
+      resumeSessions = parseResumeSessions(localStorage.getItem(resumeStorageKey));
     } catch (error) {
       appError = `Could not load the local catalog: ${messageOf(error)}`;
     }
@@ -252,6 +281,132 @@
 
   function messageOf(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  /// The filename part of `owner/repo`, used to match running processes.
+  function appNameFor(source: TrackedSource): string {
+    return source.repo.split("/").at(-1) ?? source.repo;
+  }
+
+  function parseResumeSessions(saved: string | null): Record<string, ResumeSession | undefined> {
+    if (!saved) return {};
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(saved);
+    } catch {
+      return {};
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: Record<string, ResumeSession | undefined> = {};
+    for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
+      const session = value as Partial<ResumeSession> | null | undefined;
+      if (
+        typeof session === "object" &&
+        session !== null &&
+        typeof session.wasRunning === "boolean" &&
+        typeof session.targetVersion === "string" &&
+        typeof session.savedAt === "number" &&
+        (typeof session.launchPath === "string" || session.launchPath === undefined)
+      ) {
+        result[id] = {
+          wasRunning: session.wasRunning,
+          targetVersion: session.targetVersion,
+          launchPath: session.launchPath,
+          savedAt: session.savedAt,
+        };
+      }
+    }
+    return result;
+  }
+
+  function saveResumeSession(source: TrackedSource, session: ResumeSession): void {
+    resumeSessions = { ...resumeSessions, [source.id]: session };
+  }
+
+  function deleteResumeSession(sourceId: string): void {
+    if (resumeSessions[sourceId] === undefined) return;
+    delete resumeSessions[sourceId];
+    resumeSessions = { ...resumeSessions };
+  }
+
+  /// Detects the running app, graceful-closes it when needed, and returns the
+  /// session to persist; `ok: false` aborts the update before downloading.
+  async function prepareUpdateSession(
+    source: TrackedSource,
+  ): Promise<{ ok: true; session: ResumeSession | null } | { ok: false; message: string }> {
+    const appName = appNameFor(source);
+    const baseSession: ResumeSession = {
+      wasRunning: false,
+      targetVersion: source.version,
+      savedAt: Date.now(),
+    };
+    if (!source.appIdentifier) return { ok: true, session: null };
+    try {
+      const state = await invoke<RunningAppStateEvent>("get_running_app_state", {
+        appName,
+        appIdentifier: source.appIdentifier,
+      });
+      if (state.isSelf) {
+        showSnackbar(
+          "Updating Updainium itself stays manual: close Updainium before completing the installer.",
+          7000,
+        );
+        return { ok: true, session: null };
+      }
+      if (!state.running) return { ok: true, session: null };
+      const exited = await invoke<boolean>("quit_running_app", {
+        appName,
+        appIdentifier: source.appIdentifier,
+      });
+      if (!exited) {
+        return {
+          ok: false,
+          message: `Could not update ${appName}: it is still running after a graceful close request, so the installer was not opened. Close ${appName} manually and try again.`,
+        };
+      }
+      showSnackbar(`Closed ${appName} gracefully; downloading the update…`, 4000);
+      return {
+        ok: true,
+        session: {
+          ...baseSession,
+          wasRunning: true,
+          launchPath: state.launchPath ?? undefined,
+        },
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Could not check whether ${appName} is running: ${messageOf(error)}`,
+      };
+    }
+  }
+
+  /// Relaunches the app after a confirmed successful update, only when it was
+  /// running before the download (issue #31).
+  async function maybeResumeApp(source: TrackedSource): Promise<void> {
+    const session = resumeSessions[source.id];
+    if (!session?.wasRunning || !source.appIdentifier || resumeLaunching) return;
+    if (downloading === source.id || uninstalling === source.id) return;
+    const installedVersion = installedVersions[source.id];
+    if (!installedVersion?.trim() || hasUpdate(source)) return;
+    resumeLaunching = true;
+    try {
+      const launched = await invoke<boolean>("open_installed_app", {
+        appName: appNameFor(source),
+        appIdentifier: source.appIdentifier,
+        launchPath: session.launchPath ?? null,
+      });
+      deleteResumeSession(source.id);
+      if (launched) showSnackbar(`Reopened ${appNameFor(source)} after the update.`, 6000);
+    } catch (error) {
+      deleteResumeSession(source.id);
+      const detail = `The update completed, but reopening ${appNameFor(source)} failed: ${messageOf(error)}`;
+      sources = sources.map((item) =>
+        item.id === source.id ? { ...item, error: detail } : item,
+      );
+    } finally {
+      resumeLaunching = false;
+    }
   }
 
   function formatBytes(value: number): string {
@@ -584,6 +739,9 @@
       });
       installedVersions[source.id] = installedVersion;
       if (installedVersion?.trim()) rememberInstalledVersion(source.id, installedVersion, "detected");
+      // Relaunches the app when a pending resume session says it was running
+      // before the installer opened and the install finished successfully.
+      await maybeResumeApp(source);
     } catch (error) {
       installedCheckErrors = [...installedCheckErrors, source.id];
       appError = `Could not check whether ${source.repo} is installed: ${messageOf(error)}`;
@@ -716,6 +874,8 @@
     sources = sources.map((item) => (item.id === source.id ? { ...item, error: "" } : item));
     try {
       await invoke("uninstall_app", { identifier: source.appIdentifier });
+      // The app is gone, so any pending "reopen after update" is obsolete.
+      deleteResumeSession(source.id);
       sources = sources.map((item) =>
         item.id === source.id
           ? { ...item, lastKnownInstalledVersion: undefined, installedVersionSource: undefined }
@@ -752,7 +912,7 @@
   async function downloadAndOpen(source: TrackedSource): Promise<void> {
     if (!source.assetUrl || downloading || uninstalling) return;
     downloading = source.id;
-    downloadProgress = { downloadId: source.id, phase: "downloading", received: 0, total: null };
+    downloadProgress = { downloadId: source.id, phase: "closing", received: 0, total: null };
     let unlistenProgress: (() => void) | undefined;
     sources = sources.map((item) =>
       item.id === source.id
@@ -766,6 +926,23 @@
         : item,
     );
     try {
+      // A previous update attempt's resume session is now obsolete.
+      deleteResumeSession(source.id);
+      const prepared = await prepareUpdateSession(source);
+      if (!prepared.ok) {
+        sources = sources.map((item) =>
+          item.id === source.id ? { ...item, error: prepared.message } : item,
+        );
+        return;
+      }
+      if (prepared.session) saveResumeSession(source, prepared.session);
+
+      downloadProgress = {
+        downloadId: source.id,
+        phase: "downloading",
+        received: 0,
+        total: null,
+      };
       unlistenProgress = await listen<DownloadProgressEvent>("download-progress", (event) => {
         if (event.payload.downloadId === source.id) downloadProgress = event.payload;
       });
@@ -832,6 +1009,7 @@
 
   function removeSource(source: TrackedSource): boolean {
     if (!confirm(`Remove ${source.repo} from your catalog?`)) return false;
+    deleteResumeSession(source.id);
     sources = sources.filter((item) => item.id !== source.id);
     return true;
   }
