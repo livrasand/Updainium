@@ -101,6 +101,11 @@
   );
   const selectedSource = $derived(sources.find((source) => source.id === selectedSourceId));
 
+  /// Displays checksums in the conventional colon-separated uppercase form (AB:CD:…).
+  function formatSha256(value: string): string {
+    return value.toUpperCase().replace(/(..)/g, "$1:").replace(/:$/, "");
+  }
+
   const renderedReleaseNotes = $derived.by(() => {
     const notes = selectedSource?.releaseNotes;
     return notes?.trim() ? DOMPurify.sanitize(marked.parse(notes, { async: false })) : "";
@@ -1038,11 +1043,11 @@
             <div class="detail-section-label">Hash certificate (SHA-256)</div>
             {#if selectedSource.sha256}
               <div class="hash-label">Published by source</div>
-              <code class="hash-value">{selectedSource.sha256}</code>
+              <code class="hash-value">{formatSha256(selectedSource.sha256)}</code>
             {/if}
             {#if selectedSource.downloadedSha256}
               <div class="hash-label">Downloaded file</div>
-              <code class="hash-value">{selectedSource.downloadedSha256}</code>
+              <code class="hash-value">{formatSha256(selectedSource.downloadedSha256)}</code>
             {/if}
             <div class:hash-failed={selectedSource.hashVerified === false && Boolean(selectedSource.sha256)} class="hash-status">
               {#if selectedSource.hashVerified === true}
