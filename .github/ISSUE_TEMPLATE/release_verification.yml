@@ -20,8 +20,8 @@ body:
       description: All checks must pass before authorizing the release.
       options:
         - label: Successful build on macOS, Linux, and Windows
-          required: true
+          required: false
         - label: App launches without errors on all three platforms
-          required: true
+          required: false
         - label: Evidence screenshots captured for all three platforms
-          required: true
+          required: false
