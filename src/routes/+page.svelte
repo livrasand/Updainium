@@ -180,6 +180,35 @@
       : `${received} downloaded · total size unknown`;
   });
 
+  function formatRelativeTime(value?: string): string {
+    if (!value) return "Never checked";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "Date unavailable";
+    const now = Date.now();
+    const diffMs = now - date.getTime();
+    const diffSec = Math.floor(diffMs / 1000);
+    if (diffSec < 60) return "Just now";
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHour = Math.floor(diffMin / 60);
+    if (diffHour < 24) return `${diffHour}h ago`;
+    const diffDay = Math.floor(diffHour / 24);
+    return `${diffDay}d ago`;
+  }
+
+  const lastSyncAt = $derived(
+    sources.reduce((latest, source) => {
+      const time = source.checkedAt ? new Date(source.checkedAt).getTime() : 0;
+      return time > latest ? time : latest;
+    }, 0 as number),
+  );
+
+  const syncLabel = $derived.by(() => {
+    if (checking.length > 0) return `Checking ${checking.length} app${checking.length === 1 ? "" : "s"}…`;
+    if (lastSyncAt) return `Last checked ${formatRelativeTime(new Date(lastSyncAt).toISOString())}`;
+    return "Never checked";
+  });
+
   $effect(() => {
     if (!ready) return;
     try {
@@ -1021,6 +1050,15 @@
     return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(date);
   }
 
+  function sourceStatusLabel(source: TrackedSource): string {
+    if (checking.includes(source.id)) return "Checking for updates";
+    if (source.error) return "Error checking for updates";
+    if (source.version && isInstalled(source) && !hasUpdate(source)) return "Up to date";
+    if (source.version && hasUpdate(source)) return "Update available";
+    if (source.version) return "Not installed";
+    return "Pending";
+  }
+
 </script>
 
 <svelte:head>
@@ -1058,6 +1096,15 @@
   </aside>
 
   <main class="main-content">
+    <header class="topbar" aria-label="Sync status">
+      <div class="sync-indicator" class:checking={checking.length > 0} aria-live="polite" aria-atomic="true">
+        <span class="sync-dot" aria-hidden="true"></span>
+        <span class="sync-label">{syncLabel}</span>
+        <button class="sync-button" type="button" aria-label="Check for updates" title="Check for updates" disabled={!sources.length || checking.length > 0} onclick={refreshAll}>
+          <svg height="16px" viewBox="0 -960 960 960" width="16px" fill="currentColor" aria-hidden="true" class:spinning={checking.length > 0}><path d="M204-318q-22-38-33-78t-11-82q0-134 93-228t227-94h7l-64-64 56-56 160 160-160 160-56-56 64-64h-7q-100 0-170 70.5T240-478q0 26 6 51t18 49l-60 60ZM481-40 321-200l160-160 56-56-64 64h7q100 0 170-70.5T720-482q0-26-6-51t-18-49l60-60q22 38 33 78t11 82q0 134-93 228t-227 94h-7l64 64-56 56Z"/></svg>
+        </button>
+      </div>
+    </header>
     <section class="content">
       {#if appError}
         <div class="notice error-notice" role="alert">{appError}<button onclick={() => (appError = "")} aria-label="Close">×</button></div>
@@ -1400,6 +1447,7 @@
                   <span class="release-summary">
                     {#if source.version}<span class="release-version">{source.version}</span>{/if}
                     <span class="release-date" title="Latest release date">{releaseDateLabel(source.releaseDate)}</span>
+                    <span class="status-dot" class:checking={checking.includes(source.id)} class:error={Boolean(source.error)} class:uptodate={!checking.includes(source.id) && !source.error && source.version && isInstalled(source)} aria-label={sourceStatusLabel(source)} aria-hidden="true"></span>
                   </span>
                 </button>
               </article>
@@ -1474,6 +1522,21 @@
   .breadcrumb { display: flex; align-items: center; gap: 11px; color: #93919e; font-size: 12px; }
   .breadcrumb strong { color: #494854; font-weight: 600; }
   .crumb-slash { color: #c9c8d0; }
+  .sync-indicator { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 20px; background: #f8f7fb; border: 1px solid #e9e7f1; font-size: 12px; color: #6b6a78; font-weight: 500; white-space: nowrap; }
+  .sync-indicator.checking { background: #f0e7ff; border-color: #d8c7ff; color: #6148d5; }
+  .sync-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #9E9E9E; box-shadow: 0 0 0 3px color-mix(in srgb, #9E9E9E 25%, transparent); }
+  .sync-indicator.checking .sync-dot { background: #2196F3; animation: sync-pulse 2s ease-in-out infinite; box-shadow: 0 0 0 3px color-mix(in srgb, #2196F3 30%, transparent); }
+  .sync-label { font-size: 12px; font-weight: 500; }
+  .sync-button { display: grid; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #6b6a78; cursor: pointer; transition: background .16s ease, color .16s ease; }
+  .sync-button:hover { background: #f2efff; color: #6148d5; }
+  .sync-button:disabled { opacity: .5; cursor: wait; }
+  .sync-button svg { width: 16px; height: 16px; fill: currentColor; stroke: none; }
+  @keyframes sync-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+  .status-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; border: 1px solid #fff; box-sizing: border-box; }
+  .status-dot.checking { background: #2196F3; border-color: #64B5F6; box-shadow: 0 0 0 2px color-mix(in srgb, #2196F3 25%, transparent); }
+  .status-dot.error { background: #FF5722; border-color: #FF8A65; box-shadow: 0 0 0 2px color-mix(in srgb, #FF5722 25%, transparent); }
+  .status-dot.uptodate { background: #4CAF50; border-color: #81C784; box-shadow: 0 0 0 2px color-mix(in srgb, #4CAF50 25%, transparent); }
+  .status-dot:not(.checking):not(.error):not(.uptodate) { background: #9E9E9E; border-color: #BDBDBD; }
   .content { width: min(1120px, 100%); margin: 0 auto; padding: 39px 48px 54px; }
   .notice { position: relative; margin: 0 0 20px; padding: 12px 40px 12px 14px; border-radius: 8px; line-height: 1.5; }
   .error-notice { border: 1px solid #f2d5d5; background: #fff5f4; color: #a03e3a; }
