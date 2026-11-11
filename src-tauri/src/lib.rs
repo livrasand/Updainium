@@ -1124,6 +1124,14 @@ async fn download_release_asset(
         .app_cache_dir()
         .map_err(|error| error.to_string())?;
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::metadata(&directory).map_err(|error| error.to_string())?.permissions();
+        if perms.mode() & 0o077 != 0 {
+            return Err("Cache directory is world-readable".into());
+        }
+    }
     let destination = directory.join(safe_name);
     let temporary = destination.with_extension("download");
     let mut file = fs::File::create(&temporary).map_err(|error| error.to_string())?;

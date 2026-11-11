@@ -7,9 +7,10 @@ use std::{
     collections::HashMap,
     future::Future,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::State;
+use tokio::time::sleep;
 
 const FILE_NAME: &str = "updainium-settings.json";
 
@@ -332,23 +333,44 @@ async fn api_request(
     path: &str,
     body: Option<Value>,
 ) -> Result<ApiResponse, String> {
-    let mut request = client()?
-        .request(method, format!("https://api.github.com{path}"))
-        .header("Accept", "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28");
-    if !token.is_empty() {
-        request = request.bearer_auth(token);
-    }
-    if let Some(body) = body {
-        request = request.json(&body);
-    }
-    response_json(
-        request
+    let mut retries = 0;
+    loop {
+        let mut request = client()?
+            .request(method.clone(), format!("https://api.github.com{path}"))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28");
+        if !token.is_empty() {
+            request = request.bearer_auth(token);
+        }
+        if let Some(ref body) = body {
+            request = request.json(body);
+        }
+        let response = request
             .send()
             .await
-            .map_err(|_| "Could not connect to GitHub. Check your connection.")?,
-    )
-    .await
+            .map_err(|_| "Could not connect to GitHub. Check your connection.")?;
+
+        let status = response.status();
+
+        if status.as_u16() == 429 && retries < 3 {
+            let reset_secs = response
+                .headers()
+                .get("X-RateLimit-Reset")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(60);
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let wait = reset_secs.saturating_sub(now).max(1).min(300);
+            sleep(Duration::from_secs(wait)).await;
+            retries += 1;
+            continue;
+        }
+
+        return response_json(response).await;
+    }
 }
 
 async fn account(token: &str) -> Result<Account, String> {
