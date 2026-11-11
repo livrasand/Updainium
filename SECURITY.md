@@ -37,6 +37,16 @@ If you have questions, contact us anonymously.
 
 We prefer all communications to be in Spanish.
 
+## Gist Privacy
+
+GitHub Gists used for backups are **public by design**. Anyone with the gist URL can read the backup contents. Backup gists are not indexed by search engines but are accessible without authentication. To protect your data:
+
+- Use long, randomly generated gist URLs (GitHub does this automatically)
+- Do not share gist URLs publicly
+- Treat backup gists as publicly readable; do not store highly sensitive secrets in them
+
+If you need private backups, export your settings locally instead of using GitHub Gists.
+
 Thank you for helping keep Updainium secure.
 
 <!-- END UPDAINIUM SECURITY.MD BLOCK -->
