@@ -11,12 +11,20 @@ Inspired by the incredible [Obtainium](https://github.com/ImranR98/Obtainium), U
 
 Stop relying on outdated package managers or checking websites manually. Updainium tracks public repositories across multiple forges, monitors for new releases, and downloads the exact file extension you need for your OS—directly from the developer's source.
 
-## Key Features
+## Features
 
-* **Multi-Forge Support:** Works seamlessly with GitHub, GitLab, Gitea, Forgejo, and compatible services.
-* **Smart Extension Matching:** Set your preferred file type (e.g., `.exe`, `.dmg`, `.AppImage`, `.deb`) and Updainium will automatically grab the right asset from the release.
-* **Native Desktop Experience:** Fast, lightweight, and built for Windows, macOS, and Linux.
-* **Direct from Source:** No middlemen, no third-party repositories. You download exactly what the developer published.
+It has a lot of things going for it:
+
+- It mostly works today. I use it every day to update and install my apps.
+- Decent performance.
+- Cross-platform support for macOS, Linux and Windows.
+- No AI integration or monetization scheme.
+- No telemetry or proprietary server component.
+- No involuntary auto updates.
+- Tries not to install anything without explicit permission.
+- Works seamlessly with GitHub, GitLab, Gitea, Forgejo, and compatible services.
+- Set your preferred file type (e.g., `.exe`, `.dmg`, `.AppImage`, `.deb`) and Updainium automatically selects the appropriate release asset.
+- No middlemen or third-party repositories. You download exactly what the developer published.
 
 ## Manifesto
 

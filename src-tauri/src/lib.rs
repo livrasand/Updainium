@@ -172,6 +172,7 @@ pub fn run() {
             github::github_api_token_status,
             github::github_api_token_save,
             github::github_api_token_clear,
+            github::github_api_token_validate,
             get_platform,
             set_background_mode,
             process::get_running_app_state,
@@ -308,6 +309,40 @@ async fn github_api_token_or_anonymous(state: &github::ApiTokenState) -> Option<
     github::api_token(state.clone()).await.ok().flatten()
 }
 
+fn token_for_host<'a>(url: &reqwest::Url, token: Option<&'a str>) -> Option<&'a str> {
+    (url.host_str() == Some("api.github.com"))
+        .then_some(token)
+        .flatten()
+}
+
+async fn api_get(
+    client: &reqwest::Client,
+    url: reqwest::Url,
+    token: Option<&str>,
+) -> Result<reqwest::Response, String> {
+    let mut request = client
+        .get(url)
+        .header(reqwest::header::USER_AGENT, "Updainium")
+        .header(reqwest::header::ACCEPT, "application/json");
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+    request.send().await.map_err(|error| error.to_string())
+}
+
+async fn api_get_with_anonymous_fallback(
+    client: &reqwest::Client,
+    url: reqwest::Url,
+    token: Option<&str>,
+) -> Result<reqwest::Response, String> {
+    let response = api_get(client, url.clone(), token).await?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED && token.is_some() {
+        api_get(client, url, None).await
+    } else {
+        Ok(response)
+    }
+}
+
 #[tauri::command]
 async fn fetch_release_metadata(
     api_urls: Vec<String>,
@@ -320,33 +355,27 @@ async fn fetch_release_metadata(
     let client = https_client()?;
     let api_token = github_api_token_or_anonymous(&token_state).await;
     let mut not_found = false;
-    let mut transport_error: Option<String> = None;
+    let mut last_error: Option<String> = None;
 
     for api_url in api_urls {
         let parsed_url =
             match parse_https_url(&api_url, "The release API must be reached over HTTPS.") {
                 Ok(parsed_url) => parsed_url,
                 Err(error) => {
-                    transport_error = Some(error);
+                    last_error = last_error.or(Some(error));
                     continue;
                 }
             };
 
-        let mut request = client
-            .get(parsed_url)
-            .header(reqwest::header::USER_AGENT, "Updainium")
-            .header(reqwest::header::ACCEPT, "application/json");
-        if let Some(token) = &api_token {
-            request = request.bearer_auth(token);
-        }
-
-        let response = match request.send().await {
-            Ok(response) => response,
-            Err(error) => {
-                transport_error = Some(error.to_string());
-                continue;
-            }
-        };
+        let token = token_for_host(&parsed_url, api_token.as_deref());
+        let response =
+            match api_get_with_anonymous_fallback(&client, parsed_url.clone(), token).await {
+                Ok(response) => response,
+                Err(error) => {
+                    last_error = last_error.or(Some(error));
+                    continue;
+                }
+            };
 
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {
@@ -354,7 +383,9 @@ async fn fetch_release_metadata(
             continue;
         }
         if !status.is_success() {
-            return Err(format!("The release API responded with status {status}."));
+            last_error = last_error
+                .or_else(|| Some(format!("The release API responded with status {status}.")));
+            continue;
         }
 
         let payload: serde_json::Value = response
@@ -364,10 +395,10 @@ async fn fetch_release_metadata(
         return Ok(normalize_release(payload));
     }
 
-    if not_found {
+    if not_found && last_error.is_none() {
         return Err("The repository has no published releases or is not accessible.".into());
     }
-    Err(transport_error.unwrap_or_else(|| "The release API could not be reached.".into()))
+    Err(last_error.unwrap_or_else(|| "The release API could not be reached.".into()))
 }
 
 #[tauri::command]
@@ -377,17 +408,14 @@ async fn fetch_repository_icon(
 ) -> Result<Option<String>, String> {
     let parsed_url = parse_https_url(&api_url, "The repository API must be reached over HTTPS.")?;
     let api_token = github_api_token_or_anonymous(&token_state).await;
-    let mut request = https_client()?
-        .get(parsed_url)
-        .header(reqwest::header::USER_AGENT, "Updainium")
-        .header(reqwest::header::ACCEPT, "application/json");
-    if let Some(token) = &api_token {
-        request = request.bearer_auth(token);
-    }
-    let payload: serde_json::Value = request
-        .send()
-        .await
-        .map_err(|error| error.to_string())?
+    let client = https_client()?;
+    let response = api_get_with_anonymous_fallback(
+        &client,
+        parsed_url.clone(),
+        token_for_host(&parsed_url, api_token.as_deref()),
+    )
+    .await?;
+    let payload: serde_json::Value = response
         .error_for_status()
         .map_err(|error| error.to_string())?
         .json()
@@ -1333,5 +1361,20 @@ mod tests {
             unique_identifier(vec!["first".into(), "second".into()]),
             None
         );
+    }
+
+    #[test]
+    fn github_api_token_is_only_sent_to_api_github_com() {
+        let github_url =
+            reqwest::Url::parse("https://api.github.com/repos/octocat/hello-world/releases/latest")
+                .unwrap();
+        assert_eq!(token_for_host(&github_url, Some("token")), Some("token"));
+        let gitlab_url =
+            reqwest::Url::parse("https://gitlab.com/api/v4/projects/a%2Fb/releases").unwrap();
+        assert_eq!(token_for_host(&gitlab_url, Some("token")), None);
+        let gitea_url =
+            reqwest::Url::parse("https://codeberg.org/api/v1/repos/a/b/releases/latest").unwrap();
+        assert_eq!(token_for_host(&gitea_url, Some("token")), None);
+        assert_eq!(token_for_host(&github_url, None), None);
     }
 }
