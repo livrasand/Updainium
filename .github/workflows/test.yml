@@ -188,9 +188,21 @@ jobs:
           set -euo pipefail
           : > images.txt
           RELEASE_TAG="ci-screenshots-${ISSUE}-${GITHUB_RUN_ID}"
-          gh release create "$RELEASE_TAG" -R "$REPO" --draft \
-            -t "CI screenshots (run ${GITHUB_RUN_ID})" \
-            -n "Updainium verification screenshots, used in issues" >/dev/null
+          # Draft releases are invisible to the /releases/tags/{tag} endpoint
+          # (and therefore unreliable to resolve by tag in gh), so everything
+          # here works with the release ID obtained from the list endpoint,
+          # which does include drafts. The lookup first makes the step
+          # idempotent on re-runs of the same run ID.
+          RELEASE_ID="$(gh api "repos/${REPO}/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"${RELEASE_TAG}\") | .id")"
+          if [[ -z "$RELEASE_ID" ]]; then
+            RELEASE_ID="$(gh api --method POST "repos/${REPO}/releases" \
+              -f tag_name="$RELEASE_TAG" \
+              -f name="CI screenshots (run ${GITHUB_RUN_ID})" \
+              -f body="Updainium verification screenshots, used in issues" \
+              -F draft=true --jq .id)"
+          fi
+          test -n "$RELEASE_ID"
 
           shopt -s nullglob
           for f in out/*/evidence/screenshot-*.png; do
@@ -206,14 +218,16 @@ jobs:
             [[ "$mime" == image/png ]] || continue
             name="verify-${ISSUE}-${GITHUB_RUN_ID:0:8}-${base}.png"
             cp "$f" "$name"
-            gh release upload "$RELEASE_TAG" -R "$REPO" "$name"
+            gh api --method POST \
+              "repos/${REPO}/releases/${RELEASE_ID}/assets?name=${name}" \
+              -H "Content-Type: application/octet-stream" \
+              --input "$name" --jq .name >/dev/null
             url="https://github.com/$REPO/releases/download/${RELEASE_TAG}/${name}"
             echo -e "${os}\t${url}" >> images.txt
           done
 
           # Publish the draft so asset URLs are publicly accessible from the issue.
-          RELEASE_ID="$(gh release view "$RELEASE_TAG" -R "$REPO" --json id -q .id)"
-          gh api -X PATCH "repos/${REPO}/releases/${RELEASE_ID}" -f draft=false >/dev/null
+          gh api -X PATCH "repos/${REPO}/releases/${RELEASE_ID}" -F draft=false >/dev/null
 
           cat images.txt
 
