@@ -184,6 +184,7 @@ jobs:
       - name: Upload the screenshots to a per-run release
         env:
           REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           : > images.txt
@@ -198,6 +199,7 @@ jobs:
           if [[ -z "$RELEASE_ID" ]]; then
             RELEASE_ID="$(gh api --method POST "repos/${REPO}/releases" \
               -f tag_name="$RELEASE_TAG" \
+              -f target_commitish="$SHA" \
               -f name="CI screenshots (run ${GITHUB_RUN_ID})" \
               -f body="Updainium verification screenshots, used in issues" \
               -F draft=true --jq .id)"
