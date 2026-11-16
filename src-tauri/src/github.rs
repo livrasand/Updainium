@@ -600,7 +600,9 @@ async fn verify_api_token(token: &str) -> Result<(), String> {
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
         .await
-        .map_err(|_| "Could not verify the token with GitHub. Check your connection and try again.")?;
+        .map_err(|_| {
+            "Could not verify the token with GitHub. Check your connection and try again."
+        })?;
     match response.status().as_u16() {
         200 => Ok(()),
         401 => Err("GitHub rejected this token. Create a new personal access token and try again.".into()),
@@ -638,6 +640,14 @@ pub async fn github_api_token_clear(state: State<'_, ApiTokenState>) -> Result<(
     tauri::async_runtime::spawn_blocking(move || remove_api_token(&state))
         .await
         .map_err(|_| "Could not remove your GitHub token.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn github_api_token_validate(state: State<'_, ApiTokenState>) -> Result<bool, String> {
+    match api_token(state.inner().clone()).await? {
+        Some(token) => Ok(verify_api_token(&token).await.is_ok()),
+        None => Ok(false),
+    }
 }
 
 fn summary(value: Value) -> Result<GistSummary, String> {
@@ -764,8 +774,7 @@ pub async fn github_write_backup(
             let expected = expected_revision
                 .as_deref()
                 .ok_or("Review the latest backup before updating it.")?;
-            let existing =
-                api_request(&token, Method::GET, &format!("/gists/{id}"), None).await?;
+            let existing = api_request(&token, Method::GET, &format!("/gists/{id}"), None).await?;
             verify_revision(&existing.value, expected)?;
             if !existing.value["files"][FILE_NAME].is_object() {
                 return Err("This gist is not an Updainium backup.".into());
@@ -773,13 +782,8 @@ pub async fn github_write_backup(
             if existing.value["owner"]["login"].as_str() != Some(login(&state)?.as_str()) {
                 return Err("You can only update your own backup gists.".into());
             }
-            let updated = api_request(
-                &token,
-                Method::PATCH,
-                &format!("/gists/{id}"),
-                Some(body),
-            )
-            .await?;
+            let updated =
+                api_request(&token, Method::PATCH, &format!("/gists/{id}"), Some(body)).await?;
             verify_no_interleaving(&updated.value, expected)?;
             updated.value
         } else {
@@ -904,7 +908,11 @@ mod tests {
     #[test]
     fn sign_in_survives_restart_and_disconnect_removes_saved_credentials() {
         let credentials = Arc::new(TestCredentials::default());
-        let first = GithubState(Arc::default(), credentials.clone(), RequestRegistry::default());
+        let first = GithubState(
+            Arc::default(),
+            credentials.clone(),
+            RequestRegistry::default(),
+        );
         tauri::async_runtime::block_on(store_account(
             &first,
             "test-token".into(),
@@ -915,7 +923,11 @@ mod tests {
         ))
         .unwrap();
         drop(first);
-        let restarted = GithubState(Arc::default(), credentials.clone(), RequestRegistry::default());
+        let restarted = GithubState(
+            Arc::default(),
+            credentials.clone(),
+            RequestRegistry::default(),
+        );
         assert_eq!(
             restore_saved_session(&restarted).unwrap().unwrap().login,
             "alice"
@@ -930,7 +942,11 @@ mod tests {
     #[test]
     fn cancelled_sign_in_cannot_save_credentials() {
         let credentials = Arc::new(TestCredentials::default());
-        let state = GithubState(Arc::default(), credentials.clone(), RequestRegistry::default());
+        let state = GithubState(
+            Arc::default(),
+            credentials.clone(),
+            RequestRegistry::default(),
+        );
         state.0.lock().unwrap().generation = 1;
         assert!(tauri::async_runtime::block_on(store_account(
             &state,

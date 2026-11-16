@@ -66,7 +66,17 @@
       }
     }).catch((cause) => { if (!disposed) githubError = messageOf(cause); });
     void invoke<boolean>("github_api_token_status").then((saved) => {
-      if (!disposed) apiTokenSaved = saved;
+      if (disposed) return;
+      apiTokenSaved = saved;
+      if (saved) {
+        void invoke<boolean>("github_api_token_validate")
+          .then((valid) => {
+            if (!disposed && !valid) {
+              apiTokenNotice = "GitHub rejected your saved API token. Update checks fall back to anonymous requests; remove it and save a new one to keep checks reliable.";
+            }
+          })
+          .catch(() => { /* Token validation is informational only. */ });
+      }
     }).catch(() => { /* Token status is informational only. */ });
     return () => {
       disposed = true;
