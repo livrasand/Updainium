@@ -25,14 +25,19 @@ struct Platform {
 struct ReleaseAsset {
     name: String,
     browser_download_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     sha256: Option<String>,
 }
 
 #[derive(serde::Serialize)]
 struct Release {
+    #[serde(skip_serializing_if = "Option::is_none")]
     tag_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     published_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     body: Option<String>,
     assets: Vec<ReleaseAsset>,
 }
@@ -1127,7 +1132,9 @@ async fn download_release_asset(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let perms = fs::metadata(&directory).map_err(|error| error.to_string())?.permissions();
+        let perms = fs::metadata(&directory)
+            .map_err(|error| error.to_string())?
+            .permissions();
         if perms.mode() & 0o077 != 0 {
             return Err("Cache directory is world-readable".into());
         }
