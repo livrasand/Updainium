@@ -1,4 +1,6 @@
-# <img src="./static/logo.png" width="32" height="32" style="vertical-align: middle;" /> Updainium
+<picture><source srcset="./static/docs_logo_dark.png" media="(prefers-color-scheme: dark)" /> <img src="./static/docs_logo_light.png" alt="Updainium Logo" /></picture>
+
+# [Updainium](https://github.com/livrasand/Updainium)
 
 Get release files straight from the source.
 
