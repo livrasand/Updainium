@@ -10,6 +10,7 @@
   import DOMPurify from "dompurify";
   import "github-markdown-css";
   import { assetForExtension, assetForPlatform, formats, type Platform } from "$lib/assets";
+  import { isValidTrackedSource, normalizeSavedSource, type TrackedSource } from "$lib/catalog";
   import Button from "@smui/button";
   import Card from "@smui/card";
 
@@ -18,8 +19,8 @@
   type Release = {
     tag_name?: string;
     name?: string;
-    published_at?: string;
-    body?: string;
+    published_at?: string | null;
+    body?: string | null;
     assets: ReleaseAsset[];
   };
   type SourceReference = { repo: string; url: string; repositoryPath: string; provider: string };
@@ -40,28 +41,6 @@
     targetVersion: string;
     launchPath?: string;
     savedAt: number;
-  };
-  type TrackedSource = {
-    id: string;
-    repo: string;
-    url: string;
-    appIdentifier?: string;
-    assetExtension?: string;
-    assetArchitecture?: Architecture;
-    version: string;
-    releaseDate?: string;
-    releaseNotes?: string;
-    assetName: string;
-    assetUrl: string;
-    checkedAt: string;
-    error: string;
-    iconUrl?: string;
-    downloadPath?: string;
-    sha256?: string;
-    downloadedSha256?: string;
-    hashVerified?: boolean;
-    lastKnownInstalledVersion?: string;
-    installedVersionSource?: "detected" | "manual";
   };
 
   const storageKey = "updainium.sources.v1";
@@ -115,7 +94,6 @@
   );
   const selectedSource = $derived(sources.find((source) => source.id === selectedSourceId));
 
-  /// Displays checksums in the conventional colon-separated uppercase form (AB:CD:…).
   function formatSha256(value: string): string {
     return value.toUpperCase().replace(/(..)/g, "$1:").replace(/:$/, "");
   }
@@ -223,35 +201,11 @@
       const saved = localStorage.getItem(storageKey);
       if (saved) {
         const parsed: unknown = JSON.parse(saved);
-        if (
-          !Array.isArray(parsed) ||
-          !parsed.every(
-            (source) =>
-              source &&
-              typeof source.id === "string" &&
-              typeof source.repo === "string" &&
-              typeof source.url === "string" &&
-              (source.appIdentifier === undefined || typeof source.appIdentifier === "string") &&
-              typeof source.version === "string" &&
-              (source.releaseDate === undefined || typeof source.releaseDate === "string") &&
-              (source.releaseNotes === undefined || typeof source.releaseNotes === "string") &&
-              typeof source.assetName === "string" &&
-              typeof source.assetUrl === "string" &&
-              typeof source.checkedAt === "string" &&
-              typeof source.error === "string" &&
-              (source.lastKnownInstalledVersion === undefined || typeof source.lastKnownInstalledVersion === "string") &&
-              (source.installedVersionSource === undefined || source.installedVersionSource === "detected" || source.installedVersionSource === "manual") &&
-              (source.sha256 === undefined || typeof source.sha256 === "string") &&
-              (source.downloadedSha256 === undefined || typeof source.downloadedSha256 === "string") &&
-              (source.hashVerified === undefined || typeof source.hashVerified === "boolean") &&
-              (source.assetArchitecture === undefined ||
-                architectures.some((architecture) => architecture.value === source.assetArchitecture)) &&
-              (source.iconUrl === undefined || typeof source.iconUrl === "string"),
-          )
-        ) {
+        const restored = Array.isArray(parsed) ? parsed.map(normalizeSavedSource) : null;
+        if (!restored || !restored.every(isValidTrackedSource)) {
           throw new Error("The saved catalog is not in a valid format.");
         }
-        sources = parsed;
+        sources = restored;
       }
       resumeSessions = parseResumeSessions(localStorage.getItem(resumeStorageKey));
     } catch (error) {
@@ -312,7 +266,6 @@
     return error instanceof Error ? error.message : String(error);
   }
 
-  /// The filename part of `owner/repo`, used to match running processes.
   function appNameFor(source: TrackedSource): string {
     return source.repo.split("/").at(-1) ?? source.repo;
   }
@@ -358,8 +311,6 @@
     resumeSessions = { ...resumeSessions };
   }
 
-  /// Detects the running app, graceful-closes it when needed, and returns the
-  /// session to persist; `ok: false` aborts the update before downloading.
   async function prepareUpdateSession(
     source: TrackedSource,
   ): Promise<{ ok: true; session: ResumeSession | null } | { ok: false; message: string }> {
@@ -410,8 +361,6 @@
     }
   }
 
-  /// Relaunches the app after a confirmed successful update, only when it was
-  /// running before the download (issue #31).
   async function maybeResumeApp(source: TrackedSource): Promise<void> {
     const session = resumeSessions[source.id];
     if (!session?.wasRunning || !source.appIdentifier || resumeLaunching) return;
@@ -574,8 +523,8 @@
           ? {
               ...item,
               version: release.tag_name || release.name || "Unversioned release",
-              releaseDate: release.published_at,
-              releaseNotes: release.body,
+              releaseDate: release.published_at ?? undefined,
+              releaseNotes: release.body ?? undefined,
               assetName: asset.name,
               assetUrl: asset.browser_download_url,
               sha256: asset.sha256 ?? undefined,
@@ -768,8 +717,6 @@
       });
       installedVersions[source.id] = installedVersion;
       if (installedVersion?.trim()) rememberInstalledVersion(source.id, installedVersion, "detected");
-      // Relaunches the app when a pending resume session says it was running
-      // before the installer opened and the install finished successfully.
       await maybeResumeApp(source);
     } catch (error) {
       installedCheckErrors = [...installedCheckErrors, source.id];
@@ -903,7 +850,6 @@
     sources = sources.map((item) => (item.id === source.id ? { ...item, error: "" } : item));
     try {
       await invoke("uninstall_app", { identifier: source.appIdentifier });
-      // The app is gone, so any pending "reopen after update" is obsolete.
       deleteResumeSession(source.id);
       sources = sources.map((item) =>
         item.id === source.id
@@ -955,7 +901,6 @@
         : item,
     );
     try {
-      // A previous update attempt's resume session is now obsolete.
       deleteResumeSession(source.id);
       const prepared = await prepareUpdateSession(source);
       if (!prepared.ok) {
