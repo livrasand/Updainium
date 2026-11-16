@@ -116,10 +116,13 @@ Linux (`.deb`, `.rpm`, `.AppImage`), Windows (`.msi`, `.exe`), and macOS (`.dmg`
 ```
 src/               SvelteKit frontend (routes, layout, assets)
 src/routes/        Application pages (e.g. settings/)
+src/lib/           Shared frontend logic (providers, catalog, backups)
+src/lib/providers/ Provider modules and shared release normalization
 src-tauri/         Rust backend and Tauri configuration
   src/             Rust source
   capabilities/    Tauri capability/permission definitions
   icons/           Application icons
+docs/              User and developer documentation
 .github/workflows/ CI (release pipeline)
 static/            Static assets and screenshots
 ```
@@ -132,6 +135,8 @@ static/            Static assets and screenshots
   `npm run check` before opening a pull request and make sure it passes.
 - **Backend:** Rust, edition 2021. Run `cargo fmt` and `cargo clippy` in
   `src-tauri/` before submitting; keep the code warning-free.
+- **Providers:** keep provider modules in `src/lib/providers/`, register them in
+  `src/lib/registry.ts`, and update `docs/providers.md` when behavior changes.
 - **Style:** match the existing structure, naming, and patterns of the files you
   touch. Prefer small, focused changes over large rewrites.
 - **Dependencies:** avoid adding new dependencies unless clearly justified. New

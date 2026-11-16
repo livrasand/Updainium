@@ -22,27 +22,6 @@ struct Platform {
 }
 
 #[derive(serde::Serialize)]
-struct ReleaseAsset {
-    name: String,
-    browser_download_url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sha256: Option<String>,
-}
-
-#[derive(serde::Serialize)]
-struct Release {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tag_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    published_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    body: Option<String>,
-    assets: Vec<ReleaseAsset>,
-}
-
-#[derive(serde::Serialize)]
 struct DownloadedAsset {
     path: String,
     sha256: String,
@@ -94,6 +73,7 @@ pub fn run() {
         .manage(github::ApiTokenState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
@@ -230,81 +210,6 @@ fn parse_https_url(url: &str, rejection: &'static str) -> Result<reqwest::Url, S
     Ok(parsed)
 }
 
-fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .filter(|text| !text.is_empty())
-        .map(str::to_owned)
-}
-
-fn sha256_field(value: &serde_json::Value) -> Option<String> {
-    let digest = string_field(value, "digest").or_else(|| string_field(value, "sha256"))?;
-    let digest = digest.strip_prefix("sha256:").unwrap_or(&digest);
-    (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .then(|| digest.to_ascii_lowercase())
-}
-
-fn normalize_release(payload: serde_json::Value) -> Release {
-    let payload = match payload {
-        serde_json::Value::Array(mut items) if !items.is_empty() => items.remove(0),
-        other => other,
-    };
-
-    let tag_name = string_field(&payload, "tag_name");
-    let name = string_field(&payload, "name");
-    let published_at = string_field(&payload, "published_at")
-        .or_else(|| string_field(&payload, "released_at"))
-        .or_else(|| string_field(&payload, "created_at"));
-    let body = string_field(&payload, "body").or_else(|| string_field(&payload, "description"));
-
-    let mut assets = Vec::new();
-    match payload.get("assets") {
-        Some(serde_json::Value::Array(items)) => {
-            for item in items {
-                let asset_name = string_field(item, "name");
-                let url = string_field(item, "browser_download_url");
-                if let (Some(asset_name), Some(url)) = (asset_name, url) {
-                    assets.push(ReleaseAsset {
-                        name: asset_name,
-                        browser_download_url: url,
-                        sha256: sha256_field(item),
-                    });
-                }
-            }
-        }
-        Some(serde_json::Value::Object(_)) => {
-            if let Some(links) = payload
-                .get("assets")
-                .and_then(|assets| assets.get("links"))
-                .and_then(serde_json::Value::as_array)
-            {
-                for link in links {
-                    let asset_name = string_field(link, "name");
-                    let url = string_field(link, "direct_asset_url")
-                        .or_else(|| string_field(link, "url"));
-                    if let (Some(asset_name), Some(url)) = (asset_name, url) {
-                        assets.push(ReleaseAsset {
-                            name: asset_name,
-                            browser_download_url: url,
-                            sha256: sha256_field(link),
-                        });
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-
-    Release {
-        tag_name,
-        name,
-        published_at,
-        body,
-        assets,
-    }
-}
-
 async fn github_api_token_or_anonymous(state: &github::ApiTokenState) -> Option<String> {
     github::api_token(state.clone()).await.ok().flatten()
 }
@@ -347,7 +252,7 @@ async fn api_get_with_anonymous_fallback(
 async fn fetch_release_metadata(
     api_urls: Vec<String>,
     token_state: tauri::State<'_, github::ApiTokenState>,
-) -> Result<Release, String> {
+) -> Result<serde_json::Value, String> {
     if api_urls.is_empty() {
         return Err("No release API endpoint could be derived from the URL.".into());
     }
@@ -392,7 +297,7 @@ async fn fetch_release_metadata(
             .json()
             .await
             .map_err(|error| format!("The release API returned unreadable data: {error}"))?;
-        return Ok(normalize_release(payload));
+        return Ok(payload);
     }
 
     if not_found && last_error.is_none() {
@@ -1227,48 +1132,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_codeberg_style_assets() {
-        let release = normalize_release(serde_json::json!({
-            "tag_name": "3.3.0",
-            "name": "Gram 3.3.0",
-            "assets": [
-                {
-                    "name": "Gram-x86_64-3.3.0.dmg",
-                    "browser_download_url": "https://codeberg.org/g/r/releases/download/3.3.0/Gram-x86_64-3.3.0.dmg",
-                    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                }
-            ]
-        }));
-
-        assert_eq!(release.tag_name.as_deref(), Some("3.3.0"));
-        assert_eq!(release.name.as_deref(), Some("Gram 3.3.0"));
-        assert_eq!(release.assets.len(), 1);
-        assert_eq!(release.assets[0].name, "Gram-x86_64-3.3.0.dmg");
-        assert_eq!(
-            release.assets[0].browser_download_url,
-            "https://codeberg.org/g/r/releases/download/3.3.0/Gram-x86_64-3.3.0.dmg"
-        );
-        assert_eq!(
-            release.assets[0].sha256.as_deref(),
-            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-        );
-    }
-
-    #[test]
-    fn ignores_malformed_sha256_checksums() {
-        assert_eq!(
-            sha256_field(&serde_json::json!({ "digest": "sha256:xyz" })),
-            None
-        );
-        assert_eq!(
-            sha256_field(&serde_json::json!({
-                "sha256": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
-            })),
-            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into())
-        );
-    }
-
-    #[test]
     fn calculates_sha256() {
         let mut hasher = Sha256::new();
         hasher.update(b"abc");
@@ -1276,66 +1139,6 @@ mod tests {
             format!("{:x}", hasher.finalize()),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-    }
-
-    #[test]
-    fn reads_gitlab_links() {
-        let release = normalize_release(serde_json::json!({
-            "tag_name": "v2.0.0",
-            "assets": {
-                "links": [
-                    { "name": "app.zip", "url": "https://gitlab.com/g/p/-/jobs/artifacts/main/download", "direct_asset_url": "https://gitlab.com/g/p/-/releases/v2.0.0/downloads/app.zip" }
-                ]
-            }
-        }));
-
-        assert_eq!(release.tag_name.as_deref(), Some("v2.0.0"));
-        assert_eq!(
-            release.assets[0].browser_download_url,
-            "https://gitlab.com/g/p/-/releases/v2.0.0/downloads/app.zip"
-        );
-    }
-
-    #[test]
-    fn reads_gitlab_link_without_direct_url() {
-        let release = normalize_release(serde_json::json!({
-            "assets": { "links": [{ "name": "app.zip", "url": "https://gitlab.com/fallback.zip" }] }
-        }));
-
-        assert_eq!(release.tag_name, None);
-        assert_eq!(
-            release.assets[0].browser_download_url,
-            "https://gitlab.com/fallback.zip"
-        );
-    }
-
-    #[test]
-    fn unwraps_a_release_list() {
-        let release = normalize_release(serde_json::json!([
-            { "tag_name": "1.0.0", "assets": [{ "name": "a.zip", "browser_download_url": "https://host/a.zip" }] }
-        ]));
-
-        assert_eq!(release.tag_name.as_deref(), Some("1.0.0"));
-        assert_eq!(release.assets.len(), 1);
-    }
-
-    #[test]
-    fn tolerates_missing_and_malformed_assets() {
-        let release = normalize_release(serde_json::json!({
-            "tag_name": "1.0.0",
-            "assets": [{ "name": "no-url.zip" }, { "browser_download_url": "https://host/b.zip" }]
-        }));
-
-        assert_eq!(release.tag_name.as_deref(), Some("1.0.0"));
-        assert!(release.assets.is_empty());
-    }
-
-    #[test]
-    fn treats_empty_strings_as_absent() {
-        let release = normalize_release(serde_json::json!({ "tag_name": "", "name": "" }));
-
-        assert_eq!(release.tag_name, None);
-        assert_eq!(release.name, None);
     }
 
     #[test]

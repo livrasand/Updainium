@@ -11,19 +11,11 @@
   import "github-markdown-css";
   import { assetForExtension, assetForPlatform, formats, type Platform } from "$lib/assets";
   import { isValidTrackedSource, normalizeSavedSource, type TrackedSource } from "$lib/catalog";
+  import { loadUserProviders, resolveProvider } from "$lib/registry";
   import Button from "@smui/button";
   import Card from "@smui/card";
 
   type Architecture = "auto" | "x86_64" | "aarch64" | "x86" | "arm";
-  type ReleaseAsset = { name: string; browser_download_url: string; sha256?: string | null };
-  type Release = {
-    tag_name?: string;
-    name?: string;
-    published_at?: string | null;
-    body?: string | null;
-    assets: ReleaseAsset[];
-  };
-  type SourceReference = { repo: string; url: string; repositoryPath: string; provider: string };
   type DownloadPhase = "closing" | "downloading" | "verifying" | "opening";
   type DownloadProgressEvent = {
     downloadId: string;
@@ -197,6 +189,7 @@
   });
 
   onMount(async () => {
+    await loadUserProviders();
     try {
       const saved = localStorage.getItem(storageKey);
       if (saved) {
@@ -394,56 +387,13 @@
     return `${value} B`;
   }
 
-  function repositoryFromUrl(input: string): SourceReference {
-    let parsed: URL;
-    try {
-      parsed = new URL(input);
-    } catch {
-      throw new Error("Enter a valid URL.");
-    }
-    if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
-      throw new Error("The source must use a valid HTTPS URL.");
-    }
-    const hostname = parsed.hostname.toLowerCase();
-    const parts = parsed.pathname.split("/").filter(Boolean);
-    let provider = "gitea";
-    let repositoryParts = parts;
-
-    if (hostname === "github.com") {
-      provider = "github";
-      repositoryParts = parts.slice(0, 2);
-    } else {
-      const gitlabMarker = parts.indexOf("-");
-      if (hostname === "gitlab.com" || gitlabMarker >= 2) {
-        provider = "gitlab";
-        repositoryParts = gitlabMarker >= 2 ? parts.slice(0, gitlabMarker) : parts;
-      } else {
-        const releasesMarker = parts.indexOf("releases");
-        if (releasesMarker >= 2) repositoryParts = parts.slice(0, releasesMarker);
-      }
-    }
-
-    if (repositoryParts.length < 2) {
-      throw new Error("The URL must point to a public repository.");
-    }
-    const repositoryPath = repositoryParts.join("/").replace(/\.git$/i, "");
-    const url = new URL(`/${repositoryPath}`, parsed.origin).toString().replace(/\/$/, "");
-    return { repo: `${hostname}/${repositoryPath}`, url, repositoryPath, provider };
-  }
-
   async function checkSource(id: string): Promise<void> {
     const source = sources.find((item) => item.id === id);
     if (!source || !platform || checking.includes(id)) return;
     checking = [...checking, id];
     try {
-      const reference = repositoryFromUrl(source.url);
-      const origin = new URL(reference.url).origin;
-      const repositoryApiUrl =
-        reference.provider === "github"
-          ? `https://api.github.com/repos/${reference.repositoryPath}`
-          : reference.provider === "gitlab"
-            ? `${origin}/api/v4/projects/${encodeURIComponent(reference.repositoryPath)}`
-            : `${origin}/api/v1/repos/${reference.repositoryPath.split("/").map(encodeURIComponent).join("/")}`;
+      const { provider, reference } = resolveProvider(source.url);
+      const repositoryApiUrl = provider.repoApiUrl(reference);
       let iconUrl = source.iconUrl;
       if (!iconUrl) {
         try {
@@ -459,19 +409,9 @@
         } catch {
         }
       }
-      const apiUrls =
-        reference.provider === "github"
-          ? [`https://api.github.com/repos/${reference.repositoryPath}/releases/latest`]
-          : reference.provider === "gitlab"
-            ? [
-                `${origin}/api/v4/projects/${encodeURIComponent(reference.repositoryPath)}/releases/permalink/latest`,
-              ]
-            : [
-                `${origin}/api/v1/repos/${reference.repositoryPath.split("/").map(encodeURIComponent).join("/")}/releases/latest`,
-                `${origin}/api/v3/repos/${reference.repositoryPath}/releases/latest`,
-                `${origin}/api/v4/projects/${encodeURIComponent(reference.repositoryPath)}/releases/permalink/latest`,
-              ];
-      const release = await invoke<Release>("fetch_release_metadata", { apiUrls });
+      const apiUrls = provider.releaseApiUrls(reference);
+      const payload = await invoke<unknown>("fetch_release_metadata", { apiUrls });
+      const release = provider.normalize(payload);
       const assets = release.assets ?? [];
       const asset = platform
         ? source.assetExtension
@@ -562,7 +502,7 @@
     formError = "";
     identifyingAppIdentifier = true;
     try {
-      const repo = repositoryFromUrl(sourceUrl.trim());
+      const repo = resolveProvider(sourceUrl.trim()).reference;
       const appName = repo.repositoryPath.split("/").at(-1) ?? "";
       const identifier = await invoke<string | null>("identify_installed_app_identifier", {
         appName,
@@ -609,7 +549,7 @@
     adding = true;
     try {
       const currentSource = sources.find((source) => source.id === editingSourceId);
-      const repo = repositoryFromUrl(sourceUrl.trim());
+      const repo = resolveProvider(sourceUrl.trim()).reference;
       const appIdentifier = sourceAppIdentifier.trim();
       const extensionInput = sourceExtension.trim();
       const extension = extensionInput
