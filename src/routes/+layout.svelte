@@ -4,6 +4,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { setDockVisibility } from "@tauri-apps/api/app";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import CommandPalette from "$lib/CommandPalette.svelte";
 
   let { children }: { children: Snippet } = $props();
   const backgroundKey = "updainium.background.v1";
@@ -44,6 +45,7 @@
   <div class="runtime-error" role="alert">Could not apply background settings: {backgroundError}</div>
 {/if}
 {@render children()}
+<CommandPalette />
 
 <style>
   .runtime-error {

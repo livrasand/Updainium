@@ -3,7 +3,8 @@
 Updainium reads release data through providers. A provider turns a repository
 URL into API URLs and converts the API response into the release shape the app
 uses. GitHub, GitLab, and Gitea/Forgejo are built in. A local plugin can add
-another forge without changing the application code.
+another forge or new commands to the command palette without changing the
+application code.
 
 ## Built-in providers
 
@@ -119,9 +120,10 @@ HTTPS only, and no automatic installation or updates.
 
 ## User plugins
 
-A user plugin is a self-contained JavaScript file that default-exports a
-provider object. The app loads plugins from the `plugins` directory inside its
-configuration directory.
+A user plugin is a self-contained JavaScript file. It can default-export a
+provider, a command, or an object with `providers` and `commands` arrays. The
+app loads plugins from the `plugins` directory inside its configuration
+directory.
 
 | System | Plugins directory |
 | --- | --- |
@@ -132,9 +134,34 @@ configuration directory.
 Create the directory if it does not exist, add one or more `.js` files, and
 restart the app. Plugins are loaded before the saved catalog is checked.
 
+### Plugin shape
+
+A plugin can export one of these forms:
+
+- A provider object.
+- A command object.
+- An object with `providers` and `commands` arrays.
+
+Both arrays are optional. Each entry is validated, and invalid entries are
+ignored.
+
+A command has this shape:
+
+```ts
+type Command = {
+  id: string;
+  title: string;
+  category?: string;
+  keywords?: string[];
+  when?: () => boolean;
+  run: () => void | Promise<void>;
+};
+```
+
 ### Rules
 
-- The file must be valid ECMAScript and must default-export the provider.
+- The file must be valid ECMAScript and must default-export a provider, a
+  command, or an object with `providers` and `commands` arrays.
 - Use `.js`. TypeScript, JSON, and other file types are ignored.
 - Files are read directly from the `plugins` directory. Subdirectories are not
   scanned.
@@ -142,9 +169,17 @@ restart the app. Plugins are loaded before the saved catalog is checked.
   blob module, so relative imports, bare package imports, and imports of
   application modules do not resolve.
 - Keep the module free of top-level side effects. It should only declare and
-  export the provider.
+  export the plugin objects.
 - A provider with an existing id replaces the built-in provider with that id.
   New providers are tried before the built-in providers.
+- A command with an existing id replaces the previous command. Use stable, unique
+  ids.
+- `run` may be synchronous or asynchronous. The palette waits for it and shows an
+  error if it throws.
+- `when` is optional. It is checked when the palette opens; return `false` to
+  hide the command.
+- Commands run in the WebView. They can use browser APIs and the Tauri commands
+  allowed by the app's capabilities.
 - Invalid files are skipped. If a plugin does not appear, check its syntax, its
   default export, and its location.
 - Plugins run in the application's WebView with the application's Tauri
@@ -211,6 +246,44 @@ export default {
 This example handles a Gitea-style release response. Adapt `match`,
 `repoApiUrl`, `releaseApiUrls`, and `normalize` to the target forge's API.
 
+### Command contributions
+
+Commands appear in the command palette. On macOS, open it with `Cmd+Shift+P`;
+on Windows and Linux, use `Ctrl+Shift+P`. The palette lists the commands
+registered by the app and by plugins, filtered by title, category, and
+keywords.
+
+A command-only plugin can look like this:
+
+```js
+export default {
+  commands: [
+    {
+      id: "example.openDocs",
+      title: "Open Example Forge docs",
+      category: "Example",
+      keywords: ["docs", "help"],
+      run() {
+        window.open("https://git.example.com/help", "_blank");
+      },
+    },
+  ],
+};
+```
+
+A plugin can combine providers and commands in the same default export:
+
+```js
+export default {
+  providers: [exampleProvider],
+  commands: [exampleCommand],
+};
+```
+
+`exampleProvider` and `exampleCommand` are objects defined in the same file. A
+command `run` function can use browser APIs and the Tauri commands allowed by
+the app's capabilities. It cannot import application modules or packages.
+
 ## Security
 
 Plugins are trusted code, not sandboxed extensions. They run in the WebView and
@@ -225,17 +298,19 @@ The application still enforces these boundaries for release checks:
 - Tokens are stored in the operating system credential store, not in plugin
   storage or `localStorage`.
 - Plugins cannot change the Rust backend, the Tauri capability set, or the
-  installed application files through the provider interface.
+  installed application files through the provider or command interface.
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| The plugin does not appear | Confirm the file is in the plugins directory, has a `.js` extension, default-exports a provider, and the app was restarted. |
+| The plugin does not appear | Confirm the file is in the plugins directory, has a `.js` extension, default-exports a provider, a command, or an object with `providers` and `commands` arrays, and the app was restarted. |
 | The plugin appears but never matches | Check `match`. It receives a `URL` object. Return `true` only for your host. |
+| The plugin command does not appear | Confirm the command has `id`, `title`, and `run`, the plugin was loaded, and the app was restarted. Open the palette with `Cmd/Ctrl+Shift+P`. |
 | The repository is rejected | The URL must be HTTPS, must not contain credentials, and must include at least an owner and repository. |
 | No release is found | Confirm the repository is public, has a published release, and the API URLs in `releaseApiUrls` are correct. |
 | A built-in provider stopped working | A plugin is using the same `id`. Remove the plugin or change its id. |
+| A built-in command stopped working | A plugin command is using the same `id`. Remove the plugin or change the command id. |
 | The plugin throws on load | The file must be self-contained and valid JavaScript. Imports of application modules or packages do not work. |
 
 ## Validation
@@ -248,8 +323,10 @@ cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 For a manual plugin check, run `npm run tauri dev`, place the plugin in the
-plugins directory, restart the app, add a repository that matches the plugin,
-and confirm that the release date, notes, version, and asset are populated.
+plugins directory, restart the app, open the command palette with
+`Cmd/Ctrl+Shift+P`, and confirm the plugin command appears. Add a repository that
+matches the plugin and confirm that the release date, notes, version, and asset
+are populated.
 
 ## Related files
 
@@ -259,5 +336,7 @@ and confirm that the release date, notes, version, and asset are populated.
 - `src/lib/providers/gitlab.ts`
 - `src/lib/providers/gitea.ts`
 - `src/lib/registry.ts`
+- `src/lib/commands.ts`
+- `src/lib/CommandPalette.svelte`
 - `src/lib/assets.ts`
 - `src-tauri/src/lib.rs`
