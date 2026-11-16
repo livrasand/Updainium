@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { fly } from "svelte/transition";
+  import { goto } from "$app/navigation";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -11,7 +12,8 @@
   import "github-markdown-css";
   import { assetForExtension, assetForPlatform, formats, type Platform } from "$lib/assets";
   import { isValidTrackedSource, normalizeSavedSource, type TrackedSource } from "$lib/catalog";
-  import { loadUserProviders, resolveProvider } from "$lib/registry";
+  import { registerCommand } from "$lib/commands";
+  import { loadUserPlugins, resolveProvider } from "$lib/registry";
   import Button from "@smui/button";
   import Card from "@smui/card";
 
@@ -189,7 +191,7 @@
   });
 
   onMount(async () => {
-    await loadUserProviders();
+    await loadUserPlugins();
     try {
       const saved = localStorage.getItem(storageKey);
       if (saved) {
@@ -253,6 +255,95 @@
     } catch (error) {
       storageError = `Could not save the local catalog: ${messageOf(error)}`;
     }
+  });
+
+  onMount(() => {
+    const disposers = [
+      registerCommand({
+        id: "app.add",
+        title: "Add app…",
+        category: "App",
+        keywords: ["new", "repository"],
+        run: () => {
+          editingSourceId = null;
+          sourceAppIdentifier = "";
+          sourceExtension = "";
+          sourceArchitecture = "auto";
+          sourceUrl = "";
+          formError = "";
+          showAddSection = true;
+        },
+      }),
+      registerCommand({
+        id: "app.checkAll",
+        title: "Check all updates",
+        category: "App",
+        keywords: ["refresh", "sync"],
+        run: () => refreshAll(),
+      }),
+      registerCommand({
+        id: "settings.open",
+        title: "Open settings",
+        category: "Settings",
+        keywords: ["preferences"],
+        run: () => goto("/settings"),
+      }),
+    ];
+    return () => disposers.forEach((dispose) => dispose());
+  });
+
+  $effect(() => {
+    const source = selectedSource;
+    if (!source) return;
+    const disposers = [
+      registerCommand({
+        id: "source.check",
+        title: `Check updates: ${source.repo}`,
+        category: "Source",
+        keywords: ["refresh", "release"],
+        run: () => checkSource(source.id),
+      }),
+      registerCommand({
+        id: "source.checkInstalled",
+        title: `Check installed version: ${source.repo}`,
+        category: "Source",
+        keywords: ["installed", "version"],
+        run: () => checkInstalled(source),
+      }),
+      registerCommand({
+        id: "source.primary",
+        title: `${installActionLabel(source)}: ${source.repo}`,
+        category: "Source",
+        keywords: ["install", "update", "uninstall"],
+        when: () => canInstallOrUpdate(source) || canUninstall(source),
+        run: () => runPrimaryAction(source),
+      }),
+      registerCommand({
+        id: "source.openDownloaded",
+        title: `Open downloaded installer: ${source.repo}`,
+        category: "Source",
+        keywords: ["open", "installer"],
+        when: () => Boolean(source.downloadPath),
+        run: () => reopenDownloaded(source),
+      }),
+      registerCommand({
+        id: "source.edit",
+        title: `Edit ${source.repo}`,
+        category: "Source",
+        keywords: ["configure", "extension"],
+        run: () => editSource(source),
+      }),
+      registerCommand({
+        id: "source.remove",
+        title: `Remove ${source.repo} from library`,
+        category: "Source",
+        keywords: ["delete"],
+        run: () => {
+          removeSource(source);
+        },
+      }),
+    ];
+    return () => disposers.forEach((dispose) => dispose());
   });
 
   function messageOf(error: unknown): string {

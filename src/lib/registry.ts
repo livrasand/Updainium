@@ -1,5 +1,6 @@
 import { BaseDirectory } from "@tauri-apps/api/path";
 import { readDir, readTextFile } from "@tauri-apps/plugin-fs";
+import { registerCommand, type Command } from "./commands";
 import { giteaProvider } from "./providers/gitea";
 import { githubProvider } from "./providers/github";
 import { gitlabProvider } from "./providers/gitlab";
@@ -18,6 +19,7 @@ function isProvider(value: unknown): value is Provider {
   const candidate = value as Partial<Provider>;
   return (
     typeof candidate.id === "string" &&
+    candidate.id.length > 0 &&
     typeof candidate.match === "function" &&
     typeof candidate.reference === "function" &&
     typeof candidate.repoApiUrl === "function" &&
@@ -26,12 +28,53 @@ function isProvider(value: unknown): value is Provider {
   );
 }
 
+function isCommand(value: unknown): value is Command {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<Command>;
+  return (
+    typeof candidate.id === "string" &&
+    candidate.id.length > 0 &&
+    typeof candidate.title === "string" &&
+    candidate.title.length > 0 &&
+    typeof candidate.run === "function" &&
+    (candidate.category === undefined || typeof candidate.category === "string") &&
+    (candidate.keywords === undefined ||
+      (Array.isArray(candidate.keywords) &&
+        candidate.keywords.every((keyword) => typeof keyword === "string"))) &&
+    (candidate.when === undefined || typeof candidate.when === "function")
+  );
+}
+
+function registerPluginModule(module: unknown): void {
+  if (Array.isArray(module)) {
+    for (const item of module) registerPluginModule(item);
+    return;
+  }
+  if (!module || typeof module !== "object") return;
+  const candidate = module as { providers?: unknown; commands?: unknown };
+  if (candidate.providers !== undefined || candidate.commands !== undefined) {
+    if (Array.isArray(candidate.providers)) {
+      for (const provider of candidate.providers) {
+        if (isProvider(provider)) registerProvider(provider);
+      }
+    }
+    if (Array.isArray(candidate.commands)) {
+      for (const command of candidate.commands) {
+        if (isCommand(command)) registerCommand(command);
+      }
+    }
+    return;
+  }
+  if (isProvider(module)) registerProvider(module);
+  else if (isCommand(module)) registerCommand(module);
+}
+
 function importPlugin(source: string): Promise<unknown> {
   const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
   return import(/* @vite-ignore */ url).finally(() => URL.revokeObjectURL(url));
 }
 
-export async function loadUserProviders(): Promise<void> {
+export async function loadUserPlugins(): Promise<void> {
   let entries: Awaited<ReturnType<typeof readDir>>;
   try {
     entries = await readDir("plugins", { baseDir: BaseDirectory.AppConfig });
@@ -46,7 +89,7 @@ export async function loadUserProviders(): Promise<void> {
       });
       const module: unknown = await importPlugin(source);
       const candidate = (module as { default?: unknown }).default ?? module;
-      if (isProvider(candidate)) registerProvider(candidate);
+      registerPluginModule(candidate);
     } catch {
     }
   }

@@ -23,7 +23,7 @@ It has a lot of things going for it:
 - No involuntary auto updates.
 - Tries not to install anything without explicit permission.
 - Works seamlessly with GitHub, GitLab, Gitea, Forgejo, and compatible services.
-- Add new forges with a local provider plugin. See [Providers and plugins](docs/providers.md).
+- Add new forges or commands with a local plugin. See [Providers and plugins](docs/providers.md).
 - Set your preferred file type (e.g., `.exe`, `.dmg`, `.AppImage`, `.deb`) and Updainium automatically selects the appropriate release asset.
 - No middlemen or third-party repositories. You download exactly what the developer published.
 

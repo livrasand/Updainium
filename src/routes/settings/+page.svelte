@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { beforeNavigate } from "$app/navigation";
+  import { beforeNavigate, goto } from "$app/navigation";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { invoke } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { createBackup, parseBackup, parseGistId, restoreSources, sourcesKey, type Backup } from "$lib/backup";
+  import { registerCommand } from "$lib/commands";
   import { cacheGists, clearCachedGists, readCachedGists, chooseMainBackup, mainBackupKey, type Gist, type GistRevision } from "$lib/gists";
 
   const backgroundKey = "updainium.background.v1";
@@ -51,6 +52,44 @@
 
   beforeNavigate((navigation) => {
     if (busy) navigation.cancel();
+  });
+
+  onMount(() => {
+    const disposers = [
+      registerCommand({
+        id: "settings.home",
+        title: "Back to apps",
+        category: "Settings",
+        keywords: ["library", "home"],
+        when: () => !busy,
+        run: () => goto("/"),
+      }),
+      registerCommand({
+        id: "settings.export",
+        title: "Export settings",
+        category: "Settings",
+        keywords: ["backup", "json"],
+        when: () => !busy,
+        run: () => run(exportJson),
+      }),
+      registerCommand({
+        id: "settings.import",
+        title: "Import settings",
+        category: "Settings",
+        keywords: ["backup", "json"],
+        when: () => !busy,
+        run: () => run(importJson),
+      }),
+      registerCommand({
+        id: "settings.loadBackups",
+        title: "Load GitHub backups",
+        category: "GitHub",
+        keywords: ["gists", "backup"],
+        when: () => !busy,
+        run: () => runGithub(loadGists),
+      }),
+    ];
+    return () => disposers.forEach((dispose) => dispose());
   });
 
   onMount(() => {
