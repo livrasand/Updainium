@@ -189,6 +189,15 @@ jobs:
           set -euo pipefail
           : > images.txt
           RELEASE_TAG="ci-screenshots-${ISSUE}-${GITHUB_RUN_ID}"
+
+          # Collect PNGs first; skip the whole release machinery if there are none.
+          shopt -s nullglob
+          pngs=( out/*/evidence/screenshot-*.png )
+          if [[ ${#pngs[@]} -eq 0 ]]; then
+            echo "No screenshot PNGs found — skipping release upload."
+            exit 0
+          fi
+
           # Draft releases are invisible to the /releases/tags/{tag} endpoint
           # (and therefore unreliable to resolve by tag in gh), so everything
           # here works with the release ID obtained from the list endpoint,
@@ -206,8 +215,7 @@ jobs:
           fi
           test -n "$RELEASE_ID"
 
-          shopt -s nullglob
-          for f in out/*/evidence/screenshot-*.png; do
+          for f in "${pngs[@]}"; do
             [ -f "$f" ] || continue
             base="$(basename "$f" .png)"
             case "$base" in
