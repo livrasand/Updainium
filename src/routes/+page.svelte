@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
-  import { fly } from "svelte/transition";
+  import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
@@ -11,9 +10,11 @@
   import DOMPurify from "dompurify";
   import "github-markdown-css";
   import { assetForExtension, assetForPlatform, formats, type Platform } from "$lib/assets";
-  import { isValidTrackedSource, normalizeSavedSource, type TrackedSource } from "$lib/catalog";
+  import { type TrackedSource } from "$lib/catalog";
   import { registerCommand } from "$lib/commands";
   import { loadUserPlugins, resolveProvider } from "$lib/registry";
+  import { getSettings, loadSettings, updateSettings } from "$lib/settings.svelte";
+  import { showSnackbar } from "$lib/snackbar.svelte";
   import Button from "@smui/button";
   import Card from "@smui/card";
 
@@ -37,7 +38,6 @@
     savedAt: number;
   };
 
-  const storageKey = "updainium.sources.v1";
   const resumeStorageKey = "updainium.resume.v1";
   const architectures: { value: Architecture; label: string }[] = [
     { value: "auto", label: "Automatic (this device)" },
@@ -55,8 +55,6 @@
   let sources = $state<TrackedSource[]>([]);
   let platform = $state<Platform | null>(null);
   let ready = $state(false);
-  let storageError = $state("");
-  let appError = $state("");
   let filter = $state("");
   let showAddSection = $state(false);
   let selectedSourceId = $state<string | null>(null);
@@ -65,7 +63,6 @@
   let sourceAppIdentifier = $state("");
   let sourceExtension = $state("");
   let sourceArchitecture = $state<Architecture>("auto");
-  let formError = $state("");
   let adding = $state(false);
   let identifyingAppIdentifier = $state(false);
   let appFileDragOver = $state(false);
@@ -77,9 +74,6 @@
   let installedCheckErrors = $state<string[]>([]);
   let installedVersionEditorOpenFor = $state<string | null>(null);
   let installedVersionDraft = $state("");
-  let snackbarMessage = $state("");
-  let snackbarOpen = $state(false);
-  let snackbarTimer: ReturnType<typeof setTimeout> | undefined;
   let resumeSessions = $state<Record<string, ResumeSession | undefined>>({});
   let resumeLaunching = $state(false);
 
@@ -186,31 +180,28 @@
     try {
       localStorage.setItem(resumeStorageKey, JSON.stringify(resumeSessions));
     } catch (error) {
-      appError = `Could not save the resume state: ${messageOf(error)}`;
+      showSnackbar(`Could not save the resume state: ${messageOf(error)}`, 6000, "error");
     }
   });
 
   onMount(async () => {
-    await loadUserPlugins();
     try {
-      const saved = localStorage.getItem(storageKey);
-      if (saved) {
-        const parsed: unknown = JSON.parse(saved);
-        const restored = Array.isArray(parsed) ? parsed.map(normalizeSavedSource) : null;
-        if (!restored || !restored.every(isValidTrackedSource)) {
-          throw new Error("The saved catalog is not in a valid format.");
-        }
-        sources = restored;
-      }
+      await loadUserPlugins();
+    } catch (error) {
+      showSnackbar(`Could not load plugins: ${messageOf(error)}`, 6000, "error");
+    }
+    try {
+      await loadSettings();
+      sources = [...getSettings().sources];
       resumeSessions = parseResumeSessions(localStorage.getItem(resumeStorageKey));
     } catch (error) {
-      appError = `Could not load the local catalog: ${messageOf(error)}`;
+      showSnackbar(`Could not load the local catalog: ${messageOf(error)}`, 6000, "error");
     }
 
     try {
       platform = await invoke<Platform>("get_platform");
     } catch (error) {
-      appError = `Could not detect the system: ${messageOf(error)}`;
+      showSnackbar(`Could not detect the system: ${messageOf(error)}`, 6000, "error");
     }
     ready = true;
     if (platform) {
@@ -249,12 +240,10 @@
 
   $effect(() => {
     if (!ready) return;
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(sources));
-      storageError = "";
-    } catch (error) {
-      storageError = `Could not save the local catalog: ${messageOf(error)}`;
-    }
+    const snapshot = [...sources];
+    updateSettings((current) => ({ ...current, sources: snapshot })).catch((error) => {
+      showSnackbar(`Could not save the local catalog: ${messageOf(error)}`, 6000, "error");
+    });
   });
 
   onMount(() => {
@@ -270,7 +259,6 @@
           sourceExtension = "";
           sourceArchitecture = "auto";
           sourceUrl = "";
-          formError = "";
           showAddSection = true;
         },
       }),
@@ -348,6 +336,11 @@
 
   function messageOf(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  function setSourceError(sourceId: string, error: string): void {
+    sources = sources.map((item) => (item.id === sourceId ? { ...item, error } : item));
+    showSnackbar(error, 6000, "error");
   }
 
   function appNameFor(source: TrackedSource): string {
@@ -463,9 +456,7 @@
     } catch (error) {
       deleteResumeSession(source.id);
       const detail = `The update completed, but reopening ${appNameFor(source)} failed: ${messageOf(error)}`;
-      sources = sources.map((item) =>
-        item.id === source.id ? { ...item, error: detail } : item,
-      );
+      setSourceError(source.id, detail);
     } finally {
       resumeLaunching = false;
     }
@@ -569,11 +560,11 @@
           : item,
       );
     } catch (error) {
+      const detail = messageOf(error);
       sources = sources.map((item) =>
-        item.id === id
-          ? { ...item, checkedAt: new Date().toISOString(), error: messageOf(error) }
-          : item,
+        item.id === id ? { ...item, checkedAt: new Date().toISOString(), error: detail } : item,
       );
+      showSnackbar(`Could not check ${source.repo}: ${detail}`, 6000, "error");
     } finally {
       checking = checking.filter((item) => item !== id);
     }
@@ -585,12 +576,10 @@
     sourceAppIdentifier = source.appIdentifier ?? "";
     sourceExtension = source.assetExtension ?? "";
     sourceArchitecture = source.assetArchitecture ?? "auto";
-    formError = "";
     showAddSection = true;
   }
 
   async function identifyAppIdentifier(): Promise<void> {
-    formError = "";
     identifyingAppIdentifier = true;
     try {
       const repo = resolveProvider(sourceUrl.trim()).reference;
@@ -603,7 +592,7 @@
       }
       sourceAppIdentifier = identifier;
     } catch (error) {
-      formError = `Could not identify the app ID: ${messageOf(error)}`;
+      showSnackbar(`Could not identify the app ID: ${messageOf(error)}`, 6000, "error");
     } finally {
       identifyingAppIdentifier = false;
     }
@@ -618,17 +607,16 @@
       });
       if (typeof path === "string") await identifyAppFromPath(path);
     } catch (error) {
-      formError = `Could not select the app file: ${messageOf(error)}`;
+      showSnackbar(`Could not select the app file: ${messageOf(error)}`, 6000, "error");
     }
   }
 
   async function identifyAppFromPath(path: string): Promise<void> {
-    formError = "";
     identifyingAppIdentifier = true;
     try {
       sourceAppIdentifier = await invoke<string>("identify_app_identifier_from_path", { path });
     } catch (error) {
-      formError = `Could not identify the app ID: ${messageOf(error)}`;
+      showSnackbar(`Could not identify the app ID: ${messageOf(error)}`, 6000, "error");
     } finally {
       identifyingAppIdentifier = false;
     }
@@ -636,7 +624,6 @@
 
   async function saveSource(event: SubmitEvent): Promise<void> {
     event.preventDefault();
-    formError = "";
     adding = true;
     try {
       const currentSource = sources.find((source) => source.id === editingSourceId);
@@ -696,7 +683,7 @@
       showAddSection = false;
       await Promise.all([checkSource(sourceId), checkInstalled(source)]);
     } catch (error) {
-      formError = messageOf(error);
+      showSnackbar(messageOf(error), 6000, "error");
     } finally {
       adding = false;
     }
@@ -711,25 +698,14 @@
     showSnackbar(updatesAvailable ? "Updates available" : "All your apps are up to date");
   }
 
-  function showSnackbar(message: string, timeout = 5000): void {
-    snackbarMessage = message;
-    snackbarOpen = true;
-    if (snackbarTimer) clearTimeout(snackbarTimer);
-    snackbarTimer = setTimeout(() => {
-      snackbarOpen = false;
-      snackbarTimer = undefined;
-    }, timeout);
+  async function copySourceError(error: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(error);
+      showSnackbar("Error copied to clipboard");
+    } catch (copyError) {
+      showSnackbar(`Could not copy error: ${messageOf(copyError)}`, 6000, "error");
+    }
   }
-
-  function hideSnackbar(): void {
-    if (snackbarTimer) clearTimeout(snackbarTimer);
-    snackbarTimer = undefined;
-    snackbarOpen = false;
-  }
-
-  onDestroy(() => {
-    if (snackbarTimer) clearTimeout(snackbarTimer);
-  });
 
   async function refreshSource(source: TrackedSource): Promise<void> {
     await Promise.all([checkSource(source.id), checkInstalled(source)]);
@@ -751,7 +727,7 @@
       await maybeResumeApp(source);
     } catch (error) {
       installedCheckErrors = [...installedCheckErrors, source.id];
-      appError = `Could not check whether ${source.repo} is installed: ${messageOf(error)}`;
+      showSnackbar(`Could not check whether ${source.repo} is installed: ${messageOf(error)}`, 6000, "error");
     }
   }
 
@@ -891,11 +867,7 @@
       await checkInstalled(source);
       showSnackbar(`${appName} was uninstalled.`);
     } catch (error) {
-      sources = sources.map((item) =>
-        item.id === source.id
-          ? { ...item, error: `Could not uninstall the app: ${messageOf(error)}` }
-          : item,
-      );
+      setSourceError(source.id, `Could not uninstall the app: ${messageOf(error)}`);
     } finally {
       uninstalling = null;
     }
@@ -935,9 +907,7 @@
       deleteResumeSession(source.id);
       const prepared = await prepareUpdateSession(source);
       if (!prepared.ok) {
-        sources = sources.map((item) =>
-          item.id === source.id ? { ...item, error: prepared.message } : item,
-        );
+        setSourceError(source.id, prepared.message);
         return;
       }
       if (prepared.session) saveResumeSession(source, prepared.session);
@@ -988,9 +958,7 @@
       const detail = downloadedPath
         ? `The installer downloaded, but it could not be opened (${downloadedPath}): ${messageOf(error)}`
         : `Could not download the installer: ${messageOf(error)}`;
-      sources = sources.map((item) =>
-        item.id === source.id ? { ...item, error: detail } : item,
-      );
+      setSourceError(source.id, detail);
     } finally {
       unlistenProgress?.();
       downloadProgress = null;
@@ -1004,11 +972,7 @@
       await openPath(source.downloadPath);
       sources = sources.map((item) => (item.id === source.id ? { ...item, error: "" } : item));
     } catch (error) {
-      sources = sources.map((item) =>
-        item.id === source.id
-          ? { ...item, error: `Could not open the installer: ${messageOf(error)}` }
-          : item,
-      );
+      setSourceError(source.id, `Could not open the installer: ${messageOf(error)}`);
     }
   }
 
@@ -1028,7 +992,7 @@
 
   function sourceStatusLabel(source: TrackedSource): string {
     if (checking.includes(source.id)) return "Checking for updates";
-    if (source.error) return "Error checking for updates";
+    if (source.error) return `Error checking for updates: ${source.error}`;
     if (source.version && isInstalled(source) && !hasUpdate(source)) return "Up to date";
     if (source.version && hasUpdate(source)) return "Update available";
     if (source.version) return "Not installed";
@@ -1082,13 +1046,6 @@
       </div>
     </header>
     <section class="content">
-      {#if appError}
-        <div class="notice error-notice" role="alert">{appError}<button onclick={() => (appError = "")} aria-label="Close">×</button></div>
-      {/if}
-      {#if storageError}
-        <div class="notice error-notice" role="alert">{storageError}</div>
-      {/if}
-
       {#if showAddSection}
         <section class="add-section" aria-labelledby="add-title">
           <div class="add-heading">
@@ -1149,7 +1106,6 @@
                 {/each}
               </select>
             </label>
-            {#if formError}<p class="form-error" role="alert">{formError}</p>{/if}
             <p class="add-hint">The latest release will be checked for the chosen extension and architecture, or matched to this platform automatically — including extensionless executables such as frankenphp-linux-x86_64 — when no extension is set. The identifier must match the app bundle, package, or uninstall registry entry on this device.</p>
             <div class="add-actions">
               <button class="back-link" type="button" onclick={() => { showAddSection = false; editingSourceId = null; }}>Cancel</button>
@@ -1221,9 +1177,6 @@
                 </div>
                 <div class="installed-version-hint">Set an older version to preview update availability and release notes.</div>
               </div>
-            {/if}
-            {#if selectedSource.error}
-              <p class="detail-error" role="alert">{selectedSource.error}</p>
             {/if}
             {#if selectedSource.downloadPath}
               <button class="reopen-link" type="button" onclick={() => reopenDownloaded(selectedSource)}>Open downloaded file</button>
@@ -1403,16 +1356,38 @@
       {:else}
         <div class="app-list">
           {#each visibleSources as source (source.id)}
+            {@const sourceError = source.error}
             <Card class="app-card" variant="outlined">
               <article class="app-card-content">
+                <div class="avatar-status">
+                  <button class="avatar-open-button" type="button" onclick={() => (selectedSourceId = source.id)} aria-label={`Open ${source.repo.split("/").at(-1)} details`}>
+                    <span class="app-avatar" class:has-icon={Boolean(source.iconUrl)}>
+                      {source.repo.split("/").at(-1)?.slice(0, 1).toUpperCase() ?? "G"}
+                      {#if source.iconUrl}
+                        <img src={source.iconUrl} alt="" onerror={(event) => event.currentTarget.setAttribute("hidden", "")} />
+                      {/if}
+                    </span>
+                  </button>
+                  {#if sourceError}
+                    <span class="avatar-error-tooltip-anchor">
+                      <button
+                        class="avatar-error-badge error"
+                        type="button"
+                        aria-label={`Show update error for ${appNameFor(source)}`}
+                        aria-describedby={`source-error-${source.id}`}
+                        aria-haspopup="dialog"
+                      ></button>
+                      <span class="avatar-error-tooltip" id={`source-error-${source.id}`} role="dialog" aria-label="Update check error">
+                        <strong>Update check error</strong>
+                        <span class="avatar-error-message">{sourceError}</span>
+                        <button class="avatar-error-copy" type="button" onclick={() => copySourceError(sourceError)}>Copy</button>
+                      </span>
+                    </span>
+                  {:else}
+                    <span class="avatar-error-badge" class:checking={checking.includes(source.id)} class:uptodate={!checking.includes(source.id) && source.version && isInstalled(source)} title={sourceStatusLabel(source)} aria-hidden="true"></span>
+                  {/if}
+                </div>
                 <button class="app-open-button" type="button" onclick={() => (selectedSourceId = source.id)} aria-label={`Open ${source.repo.split("/").at(-1)} details`}>
-                  <span class="app-avatar" class:has-icon={Boolean(source.iconUrl)}>
-                    {source.repo.split("/").at(-1)?.slice(0, 1).toUpperCase() ?? "G"}
-                    {#if source.iconUrl}
-                      <img src={source.iconUrl} alt="" onerror={(event) => event.currentTarget.setAttribute("hidden", "")} />
-                    {/if}
-                    {#if source.error}<span class="avatar-error-badge" title={source.error}></span>{/if}
-                  </span>
                   <span class="app-details">
                     <span class="app-title-row">
                       <span class="app-name">{source.repo.split("/").at(-1)}</span>
@@ -1423,7 +1398,6 @@
                   <span class="release-summary">
                     {#if source.version}<span class="release-version">{source.version}</span>{/if}
                     <span class="release-date" title="Latest release date">{releaseDateLabel(source.releaseDate)}</span>
-                    <span class="status-dot" class:checking={checking.includes(source.id)} class:error={Boolean(source.error)} class:uptodate={!checking.includes(source.id) && !source.error && source.version && isInstalled(source)} aria-label={sourceStatusLabel(source)} aria-hidden="true"></span>
                   </span>
                 </button>
               </article>
@@ -1435,17 +1409,6 @@
     </section>
   </main>
 
-  {#if snackbarOpen}
-    <div
-      class="snackbar"
-      role="status"
-      aria-live="polite"
-      transition:fly={{ y: 16, duration: 200 }}
-    >
-      <span class="snackbar-label">{snackbarMessage}</span>
-      <button class="snackbar-action" type="button" onclick={hideSnackbar}>Dismiss</button>
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -1508,20 +1471,7 @@
   .sync-button:disabled { opacity: .5; cursor: wait; }
   .sync-button svg { width: 16px; height: 16px; fill: currentColor; stroke: none; }
   @keyframes sync-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
-  .status-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; border: 1px solid #fff; box-sizing: border-box; }
-  .status-dot.checking { background: #2196F3; border-color: #64B5F6; box-shadow: 0 0 0 2px color-mix(in srgb, #2196F3 25%, transparent); }
-  .status-dot.error { background: #FF5722; border-color: #FF8A65; box-shadow: 0 0 0 2px color-mix(in srgb, #FF5722 25%, transparent); }
-  .status-dot.uptodate { background: #4CAF50; border-color: #81C784; box-shadow: 0 0 0 2px color-mix(in srgb, #4CAF50 25%, transparent); }
-  .status-dot:not(.checking):not(.error):not(.uptodate) { background: #9E9E9E; border-color: #BDBDBD; }
   .content { width: min(1120px, 100%); margin: 0 auto; padding: 39px 48px 54px; }
-  .notice { position: relative; margin: 0 0 20px; padding: 12px 40px 12px 14px; border-radius: 8px; line-height: 1.5; }
-  .error-notice { border: 1px solid #f2d5d5; background: #fff5f4; color: #a03e3a; }
-  .notice button { position: absolute; top: 4px; right: 10px; border: 0; background: none; color: inherit; font-size: 21px; cursor: pointer; }
-  .snackbar { position: fixed; right: 0; bottom: 24px; left: 0; z-index: 60; display: flex; width: fit-content; max-width: min(560px, calc(100vw - 40px)); min-height: 48px; align-items: center; gap: 8px; margin: 0 auto; padding: 12px 10px 12px 18px; border-radius: 10px; background: #2f2b36; box-shadow: 0 8px 24px rgb(24 19 32 / 28%); color: #f4f1f8; font-size: 13px; line-height: 1.45; }
-  .snackbar-label { min-width: 0; }
-  .snackbar-action { flex: 0 0 auto; padding: 8px 14px; border: 0; border-radius: 7px; background: transparent; color: #d2b7ff; font-size: 12px; font-weight: 650; cursor: pointer; transition: background .15s ease; }
-  .snackbar-action:hover { background: rgb(255 255 255 / 10%); }
-  .snackbar-action:focus-visible { outline: 2px solid #d2b7ff; outline-offset: 2px; }
   .page-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
   .heading-actions { display: flex; align-items: center; gap: 8px; }
   .settings-button { display: grid; width: 40px; height: 40px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--accent); transition: color .16s ease; }
@@ -1607,6 +1557,9 @@
   .app-card-content { display: flex; min-height: inherit; align-items: center; gap: 15px; padding: 17px 16px; }
   .app-open-button { display: flex; min-width: 0; flex: 1; align-items: center; gap: 15px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
   .app-open-button:focus-visible { outline: 2px solid var(--accent, #705394); outline-offset: 4px; border-radius: 8px; }
+  .avatar-status { position: relative; flex: 0 0 auto; }
+  .avatar-open-button { display: block; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
+  .avatar-open-button:focus-visible { outline: 2px solid var(--accent, #705394); outline-offset: 4px; }
   .app-avatar { position: relative; display: grid; width: 43px; height: 43px; flex: 0 0 auto; place-items: center; border: 1px solid #e5e1fb; border-radius: 21px; background: linear-gradient(145deg, #f5f2ff, #e9e4ff); color: #725bd8; font-size: 19px; font-weight: 700; }
   .app-avatar.has-icon { border: 0; border-radius: 21px; background: transparent; }
   .app-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 21px; object-fit: contain; }
@@ -1617,7 +1570,21 @@
   .app-name { overflow: hidden; margin: 0; color: #34333f; font-size: 14px; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
   .app-name { display: block; }
   .repo-link { display: inline-block; max-width: 100%; overflow: hidden; margin-top: 4px; color: #8c8a98; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-  .avatar-error-badge { position: absolute; top: -3px; right: -3px; width: 11px; height: 11px; border: 2px solid #fff; border-radius: 50%; background: #b84b48; }
+  .avatar-error-badge { position: absolute; top: -3px; right: -3px; width: 11px; height: 11px; flex: 0 0 auto; border-radius: 50%; border: 2px solid #fff; box-sizing: border-box; }
+  .avatar-error-tooltip-anchor { position: absolute; z-index: 1; top: -3px; right: -3px; width: 11px; height: 11px; }
+  .avatar-error-tooltip-anchor:hover, .avatar-error-tooltip-anchor:focus-within { z-index: 5; }
+  .avatar-error-tooltip-anchor .avatar-error-badge { padding: 0; cursor: pointer; }
+  .avatar-error-badge.checking { background: #2196F3; border-color: #64B5F6; box-shadow: 0 0 0 2px color-mix(in srgb, #2196F3 25%, transparent); }
+  .avatar-error-badge.error { background: #FF5722; border-color: #FF8A65; box-shadow: 0 0 0 2px color-mix(in srgb, #FF5722 25%, transparent); }
+  .avatar-error-badge.uptodate { background: #4CAF50; border-color: #81C784; box-shadow: 0 0 0 2px color-mix(in srgb, #4CAF50 25%, transparent); }
+  .avatar-error-badge:not(.checking):not(.error):not(.uptodate) { background: #9E9E9E; border-color: #BDBDBD; }
+  .avatar-error-tooltip { position: absolute; top: -10px; left: calc(100% + 10px); display: none; width: min(320px, calc(100vw - 88px)); padding: 16px; border: 1px solid var(--border, #e9e0ec); border-radius: 16px; background: var(--surface-raised, #fffaff); box-shadow: 0 4px 12px rgb(0 0 0 / 22%); color: var(--text, #24212a); }
+  .avatar-error-tooltip::before { position: absolute; top: 0; right: 100%; width: 10px; height: 100%; content: ""; }
+  .avatar-error-tooltip-anchor:hover .avatar-error-tooltip, .avatar-error-tooltip-anchor:focus-within .avatar-error-tooltip { display: grid; gap: 10px; }
+  .avatar-error-tooltip strong { font-size: 14px; font-weight: 600; }
+  .avatar-error-message { max-height: 180px; overflow: auto; color: var(--muted, #56515d); font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .avatar-error-copy { justify-self: start; padding: 4px 0; border: 0; background: transparent; color: var(--accent-strong, #60427f); font: inherit; font-weight: 600; cursor: pointer; }
+  .avatar-error-copy:focus-visible { outline: 2px solid var(--accent, #705394); outline-offset: 3px; border-radius: 2px; }
   .reopen-link { margin-top: 5px; padding: 0; border: 0; background: none; color: #6951da; font-size: 11px; cursor: pointer; text-decoration: underline; }
   :global(.icon-button) { display: grid; width: 34px; height: 34px; min-width: 0; flex: 0 0 auto; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #858391; cursor: pointer; }
   :global(.icon-button:hover) { border-color: #e9e7f1; background: #f8f7fb; color: #6650d1; }
@@ -1656,7 +1623,6 @@
   .field-symbol svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .field-symbol-filled svg { fill: currentColor; stroke: none; }
   .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
-  .form-error { margin: 8px 0 0; color: #b84b48; font-size: 11px; }
   .add-hint { margin: 2px 6px; color: var(--muted, #56515d); font-size: 12px; line-height: 1.55; }
   .add-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 7px; }
   .back-link { padding: 10px 14px; border: 0; border-radius: 20px; background: transparent; color: var(--muted, #56515d); cursor: pointer; transition: background .16s ease; }
@@ -1706,7 +1672,6 @@
   .mark-current-button { margin-top: 13px; padding: 7px 12px; border: 1px solid var(--border, #e9e0ec); border-radius: 16px; background: var(--surface-raised, #fffaff); color: var(--accent-strong, #60427f); font-size: 12px; cursor: pointer; }
   .mark-current-button:hover { background: var(--surface-muted, #eee7f0); }
   .installed-version-hint { margin-top: 6px; color: var(--subtle, #817b87); font-size: 11px; }
-  .detail-error { margin: 12px 0 0; color: #b84b48; font-size: 12px; line-height: 1.5; }
   .release-card .reopen-link { margin-top: 7px; }
   .hash-card { padding: 20px 24px; }
   .hash-label { margin-top: 10px; color: var(--muted, #56515d); font-size: 12px; }
@@ -1964,7 +1929,7 @@
   .app-list { gap: 12px; }
   :global(.app-card) {
     min-height: 108px;
-    overflow: hidden;
+    overflow: visible;
     border: 1px solid transparent;
     border-radius: 24px;
     background: var(--surface);

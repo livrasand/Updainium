@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { executeCommand, findCommands, type Command } from "./commands";
+  import { executeCommand, findCommands, registerCommand, type Command } from "./commands";
+  import { showSnackbar } from "./snackbar.svelte";
 
   let open = $state(false);
   let query = $state("");
   let selected = $state(0);
-  let error = $state("");
   let input = $state<HTMLInputElement>();
 
   const commands = $derived(findCommands(query));
@@ -13,7 +13,6 @@
   function openPalette(): void {
     query = "";
     selected = 0;
-    error = "";
     open = true;
   }
 
@@ -29,12 +28,10 @@
   async function runCommand(command: Command): Promise<void> {
     if (!command) return;
     closePalette();
-    error = "";
     try {
       await executeCommand(command.id);
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : String(cause);
-      open = true;
+      showSnackbar(cause instanceof Error ? cause.message : String(cause), 6000, "error");
     }
   }
 
@@ -70,14 +67,14 @@
   });
 
   onMount(() => {
-    function onWindowKeydown(event: KeyboardEvent): void {
-      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "p") {
-        event.preventDefault();
-        togglePalette();
-      }
-    }
-    window.addEventListener("keydown", onWindowKeydown);
-    return () => window.removeEventListener("keydown", onWindowKeydown);
+    const dispose = registerCommand({
+      id: "command.palette",
+      title: "Toggle command palette",
+      category: "View",
+      keywords: ["commands", "search"],
+      run: togglePalette,
+    });
+    return dispose;
   });
 </script>
 
@@ -91,9 +88,16 @@
   >
     <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
       <div class="palette-input-row">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="11" cy="11" r="7"></circle>
-          <path d="m20 20-4-4"></path>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true" width="24" height="24">
+          <defs>
+            <linearGradient id="background" x1="36" y1="20" x2="476" y2="492" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#a78bfa"/>
+              <stop offset=".52" stop-color="#6841c8"/>
+              <stop offset="1" stop-color="#39218f"/>
+            </linearGradient>
+          </defs>
+          <circle cx="256" cy="256" r="216" fill="url(#background)"/>
+          <path d="M256 120v162m-66-66 66 66 66-66M158 319v25a24 24 0 0 0 24 24h148a24 24 0 0 0 24-24v-25" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="27"/>
         </svg>
         <input
           bind:this={input}
@@ -112,9 +116,6 @@
         />
         <kbd>Esc</kbd>
       </div>
-      {#if error}
-        <div class="palette-error" role="alert">{error}</div>
-      {/if}
       <div class="palette-list" id="command-list" role="listbox" aria-label="Commands">
         {#each commands as command, index (command.id)}
           <button
@@ -252,13 +253,6 @@
     padding: 18px 12px;
     color: var(--muted, #56515d);
     text-align: center;
-  }
-
-  .palette-error {
-    padding: 8px 16px;
-    color: #a03e3a;
-    background: #fff5f4;
-    font-size: 13px;
   }
 
   .palette-footer {

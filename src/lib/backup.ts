@@ -1,5 +1,3 @@
-export const sourcesKey = "updainium.sources.v1";
-export const backgroundKey = "updainium.background.v1";
 export const backupFileName = "updainium-settings.json";
 export const maxBackupBytes = 5 * 1024 * 1024;
 export const maxBackupSources = 1000;
@@ -27,11 +25,23 @@ export type BackupSource = {
   assetExtension?: string;
   assetArchitecture?: "auto" | "x86_64" | "aarch64" | "x86" | "arm";
 };
+export type BackupSettings = {
+  backgroundEnabled: boolean;
+  startOnLogin: boolean;
+  mainBackups?: Record<string, string>;
+  plugins?: Record<string, unknown>;
+};
+export type BackupConfig = {
+  sources: unknown;
+  backgroundEnabled: boolean;
+  mainBackups?: Record<string, string>;
+  plugins?: Record<string, unknown>;
+};
 export type Backup = {
   format: "updainium-backup";
   version: 1;
   exportedAt: string;
-  settings: { backgroundEnabled: boolean; startOnLogin: boolean };
+  settings: BackupSettings;
   sources: BackupSource[];
 };
 
@@ -49,6 +59,16 @@ export function parseBackup(text: string): Backup {
   if (value.sources.length > maxBackupSources) {
     throw new Error(`The backup contains more than ${maxBackupSources} apps.`);
   }
+  let mainBackups: Record<string, string> | undefined;
+  if (value.settings.mainBackups !== undefined) {
+    if (!record(value.settings.mainBackups)) throw new Error("Invalid main backups in backup.");
+    mainBackups = {};
+    for (const [login, id] of Object.entries(value.settings.mainBackups)) {
+      if (typeof id !== "string") throw new Error("Invalid main backup ID in backup.");
+      mainBackups[login.toLowerCase()] = id;
+    }
+  }
+  const plugins = record(value.settings.plugins) ? value.settings.plugins : undefined;
   const ids = new Set<string>();
   const urls = new Set<string>();
   const sources = value.sources.map((source: unknown): BackupSource => {
@@ -79,14 +99,19 @@ export function parseBackup(text: string): Backup {
     return result;
   });
   return { format: "updainium-backup", version: 1, exportedAt: value.exportedAt,
-    settings: { backgroundEnabled: value.settings.backgroundEnabled, startOnLogin: value.settings.startOnLogin }, sources };
+    settings: {
+      backgroundEnabled: value.settings.backgroundEnabled, startOnLogin: value.settings.startOnLogin,
+      ...(mainBackups ? { mainBackups } : {}),
+      ...(plugins ? { plugins } : {}),
+    }, sources };
 }
 
-export function createBackup(storage: Pick<Storage, "getItem">, startOnLogin: boolean): Backup {
+export function createBackup(config: BackupConfig, startOnLogin: boolean): Backup {
   return parseBackup(JSON.stringify({ format: "updainium-backup", version: 1,
     exportedAt: new Date().toISOString(),
-    settings: { backgroundEnabled: storage.getItem(backgroundKey) === "true", startOnLogin },
-    sources: JSON.parse(storage.getItem(sourcesKey) ?? "[]") }));
+    settings: { backgroundEnabled: config.backgroundEnabled, startOnLogin,
+      mainBackups: config.mainBackups, plugins: config.plugins },
+    sources: config.sources }));
 }
 
 export function restoreSources(backup: Backup, current: unknown, mode: "merge" | "replace") {

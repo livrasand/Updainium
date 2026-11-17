@@ -1,12 +1,14 @@
 import { BaseDirectory } from "@tauri-apps/api/path";
-import { readDir, readTextFile } from "@tauri-apps/plugin-fs";
+import { exists, readDir, readTextFile } from "@tauri-apps/plugin-fs";
 import { registerCommand, type Command } from "./commands";
 import { giteaProvider } from "./providers/gitea";
 import { githubProvider } from "./providers/github";
 import { gitlabProvider } from "./providers/gitlab";
 import type { Provider, SourceReference } from "./providers/types";
 
-let providers: Provider[] = [githubProvider, gitlabProvider, giteaProvider];
+const builtInProviders = [githubProvider, gitlabProvider, giteaProvider];
+let providers: Provider[] = [...builtInProviders];
+const loadedPlugins = new Map<string, (() => void)[]>();
 
 export function registerProvider(provider: Provider): void {
   const index = providers.findIndex((item) => item.id === provider.id);
@@ -45,9 +47,12 @@ function isCommand(value: unknown): value is Command {
   );
 }
 
-function registerPluginModule(module: unknown): void {
+function registerPluginModule(
+  module: unknown,
+  disposeCommands: (() => void)[],
+): void {
   if (Array.isArray(module)) {
-    for (const item of module) registerPluginModule(item);
+    for (const item of module) registerPluginModule(item, disposeCommands);
     return;
   }
   if (!module || typeof module !== "object") return;
@@ -60,13 +65,13 @@ function registerPluginModule(module: unknown): void {
     }
     if (Array.isArray(candidate.commands)) {
       for (const command of candidate.commands) {
-        if (isCommand(command)) registerCommand(command);
+        if (isCommand(command)) disposeCommands.push(registerCommand(command));
       }
     }
     return;
   }
   if (isProvider(module)) registerProvider(module);
-  else if (isCommand(module)) registerCommand(module);
+  else if (isCommand(module)) disposeCommands.push(registerCommand(module));
 }
 
 function importPlugin(source: string): Promise<unknown> {
@@ -74,22 +79,34 @@ function importPlugin(source: string): Promise<unknown> {
   return import(/* @vite-ignore */ url).finally(() => URL.revokeObjectURL(url));
 }
 
+export async function listInstalledPlugins(): Promise<string[]> {
+  const options = { baseDir: BaseDirectory.AppConfig };
+  if (!(await exists("plugins", options))) return [];
+  const entries = await readDir("plugins", options);
+  return entries
+    .filter((entry) => entry.isFile && entry.name.endsWith(".js"))
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right));
+}
+
 export async function loadUserPlugins(): Promise<void> {
-  let entries: Awaited<ReturnType<typeof readDir>>;
-  try {
-    entries = await readDir("plugins", { baseDir: BaseDirectory.AppConfig });
-  } catch {
-    return;
+  const pluginNames = await listInstalledPlugins();
+  for (const disposeCommands of loadedPlugins.values()) {
+    for (const dispose of disposeCommands) dispose();
   }
-  for (const entry of entries) {
-    if (!entry.isFile || !entry.name.endsWith(".js")) continue;
+  loadedPlugins.clear();
+  providers = [...builtInProviders];
+
+  for (const name of pluginNames) {
+    const disposeCommands: (() => void)[] = [];
     try {
-      const source = await readTextFile(`plugins/${entry.name}`, {
+      const source = await readTextFile(`plugins/${name}`, {
         baseDir: BaseDirectory.AppConfig,
       });
       const module: unknown = await importPlugin(source);
       const candidate = (module as { default?: unknown }).default ?? module;
-      registerPluginModule(candidate);
+      registerPluginModule(candidate, disposeCommands);
+      loadedPlugins.set(name, disposeCommands);
     } catch {
     }
   }

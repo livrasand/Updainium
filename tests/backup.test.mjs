@@ -24,7 +24,10 @@ test("exports portable app preferences and omits credentials and local caches", 
     downloadPath: "/Users/alice/cache/app.dmg", version: "v1", assetUrl: "https://host/file",
     token: "DO-NOT-EXPORT", downloadedSha256: "cached-hash" };
   const values = { "updainium.sources.v1": JSON.stringify([source]), "updainium.background.v1": "true", "github-token": "DO-NOT-EXPORT" };
-  const backup = createBackup({ getItem: (key) => values[key] ?? null }, true);
+  const backup = createBackup({
+    sources: JSON.parse(values["updainium.sources.v1"]),
+    backgroundEnabled: values["updainium.background.v1"] === "true",
+  }, true);
   const text = JSON.stringify(backup);
   assert.equal(backup.settings.startOnLogin, true);
   assert.equal(backup.sources[0].appIdentifier, "org.app");
