@@ -1112,8 +1112,8 @@ async fn download_release_asset(
         let perms = fs::metadata(&directory)
             .map_err(|error| error.to_string())?
             .permissions();
-        if perms.mode() & 0o077 != 0 {
-            return Err("Cache directory is world-readable".into());
+        if perms.mode() & 0o022 != 0 {
+            return Err("Cache directory is group- or world-writable".into());
         }
     }
     let destination = directory.join(safe_name);
