@@ -17,6 +17,12 @@
       "identifier": "fs:allow-read-dir",
       "allow": [
         {
+          "path": "$APPCONFIG"
+        },
+        {
+          "path": "$APPCONFIG/**"
+        },
+        {
           "path": "$APPCONFIG/plugins"
         },
         {
@@ -33,6 +39,24 @@
         },
         {
           "path": "./plugins/**"
+        },
+        {
+          "path": "$APPCONFIG/themes"
+        },
+        {
+          "path": "$APPCONFIG/themes/**"
+        },
+        {
+          "path": "themes"
+        },
+        {
+          "path": "themes/**"
+        },
+        {
+          "path": "./themes"
+        },
+        {
+          "path": "./themes/**"
         }
       ]
     },
@@ -53,6 +77,42 @@
         },
         {
           "path": "./plugins/**"
+        },
+        {
+          "path": "$APPCONFIG/styles.css"
+        },
+        {
+          "path": "$APPCONFIG/init.js"
+        },
+        {
+          "path": "$APPCONFIG/theme"
+        },
+        {
+          "path": "$APPCONFIG/themes/**"
+        },
+        {
+          "path": "styles.css"
+        },
+        {
+          "path": "./styles.css"
+        },
+        {
+          "path": "init.js"
+        },
+        {
+          "path": "./init.js"
+        },
+        {
+          "path": "theme"
+        },
+        {
+          "path": "./theme"
+        },
+        {
+          "path": "themes/**"
+        },
+        {
+          "path": "./themes/**"
         }
       ]
     },
@@ -64,12 +124,30 @@
         },
         {
           "path": "$APPCONFIG/keymap.json"
+        },
+        {
+          "path": "$APPCONFIG/styles.css"
+        },
+        {
+          "path": "$APPCONFIG/init.js"
+        },
+        {
+          "path": "$APPCONFIG/theme"
+        },
+        {
+          "path": "$APPCONFIG/themes/**"
         }
       ]
     },
     {
       "identifier": "fs:allow-exists",
       "allow": [
+        {
+          "path": "$APPCONFIG"
+        },
+        {
+          "path": "$APPCONFIG/**"
+        },
         {
           "path": "$APPCONFIG/plugins"
         },
@@ -93,6 +171,51 @@
         },
         {
           "path": "./plugins/**"
+        },
+        {
+          "path": "$APPCONFIG/styles.css"
+        },
+        {
+          "path": "$APPCONFIG/init.js"
+        },
+        {
+          "path": "$APPCONFIG/theme"
+        },
+        {
+          "path": "$APPCONFIG/themes"
+        },
+        {
+          "path": "$APPCONFIG/themes/**"
+        },
+        {
+          "path": "styles.css"
+        },
+        {
+          "path": "./styles.css"
+        },
+        {
+          "path": "init.js"
+        },
+        {
+          "path": "./init.js"
+        },
+        {
+          "path": "theme"
+        },
+        {
+          "path": "./theme"
+        },
+        {
+          "path": "themes"
+        },
+        {
+          "path": "themes/**"
+        },
+        {
+          "path": "./themes"
+        },
+        {
+          "path": "./themes/**"
         }
       ]
     },
@@ -101,6 +224,15 @@
       "allow": [
         {
           "path": "$APPCONFIG/plugins/*.js"
+        },
+        {
+          "path": "$APPCONFIG/plugins/**"
+        },
+        {
+          "path": "$APPCONFIG/themes/**"
+        },
+        {
+          "path": "$APPCONFIG/themes/*.css"
         }
       ]
     },
@@ -116,10 +248,22 @@
       "identifier": "fs:allow-mkdir",
       "allow": [
         {
+          "path": "$APPCONFIG"
+        },
+        {
+          "path": "$APPCONFIG/**"
+        },
+        {
           "path": "$APPCONFIG/plugins"
         },
         {
           "path": "$APPCONFIG/plugins/**"
+        },
+        {
+          "path": "$APPCONFIG/themes"
+        },
+        {
+          "path": "$APPCONFIG/themes/**"
         }
       ]
     },
@@ -134,6 +278,15 @@
         },
         {
           "path": "$APPCONFIG/keymap.json"
+        },
+        {
+          "path": "$APPCONFIG/styles.css"
+        },
+        {
+          "path": "$APPCONFIG/init.js"
+        },
+        {
+          "path": "$APPCONFIG/theme"
         }
       ]
     }
