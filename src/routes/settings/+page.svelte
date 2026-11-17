@@ -4,20 +4,17 @@
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { invoke } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { createBackup, parseBackup, parseGistId, restoreSources, sourcesKey, type Backup } from "$lib/backup";
+  import { createBackup, parseBackup, parseGistId, restoreSources, type Backup } from "$lib/backup";
   import { registerCommand } from "$lib/commands";
-  import { cacheGists, clearCachedGists, readCachedGists, chooseMainBackup, mainBackupKey, type Gist, type GistRevision } from "$lib/gists";
+  import { cacheGists, clearCachedGists, readCachedGists, chooseMainBackup, type Gist, type GistRevision } from "$lib/gists";
+  import { getSettings, loadSettings, updateSettings, type Settings } from "$lib/settings.svelte";
+  import { showSnackbar } from "$lib/snackbar.svelte";
 
-  const backgroundKey = "updainium.background.v1";
   let backgroundEnabled = $state(false);
   let startOnLogin = $state(false);
   let ready = $state(false);
-  let error = $state("");
-  let notice = $state("");
   let busy = $state(false);
   let githubBusy = $state(false);
-  let githubError = $state("");
-  let githubNotice = $state("");
   let connectionStatus = $state("");
   let githubDialog = $state<HTMLDialogElement>();
   let githubAttempt = 0;
@@ -36,8 +33,6 @@
   let apiToken = $state("");
   let apiTokenSaved = $state(false);
   let apiTokenBusy = $state(false);
-  let apiTokenError = $state("");
-  let apiTokenNotice = $state("");
   let gists = $state<Gist[]>([]);
   let backupsLoaded = $state(false);
   let selectedGist = $state("");
@@ -94,16 +89,18 @@
 
   onMount(() => {
     let disposed = false;
-    void invoke<{ login: string } | null>("github_status").then((account) => {
+    void loadSettings().then(() => invoke<{ login: string } | null>("github_status")).then((account) => {
       if (disposed || !account) return;
       login = account.login;
       const cached = readCachedGists(login);
       if (cached !== undefined) {
         gists = cached;
         backupsLoaded = true;
-        selectMainBackup(chooseMainBackup(gists, localStorage.getItem(mainBackupKey(login))));
+        selectMainBackup(chooseMainBackup(gists, getSettings().mainBackups[login.toLowerCase()] ?? ""));
       }
-    }).catch((cause) => { if (!disposed) githubError = messageOf(cause); });
+    }).catch((cause) => {
+      if (!disposed) showSnackbar(messageOf(cause), 6000, "error");
+    });
     void invoke<boolean>("github_api_token_status").then((saved) => {
       if (disposed) return;
       apiTokenSaved = saved;
@@ -111,7 +108,7 @@
         void invoke<boolean>("github_api_token_validate")
           .then((valid) => {
             if (!disposed && !valid) {
-              apiTokenNotice = "GitHub rejected your saved API token. Update checks fall back to anonymous requests; remove it and save a new one to keep checks reliable.";
+              showSnackbar("GitHub rejected your saved API token. Update checks fall back to anonymous requests; remove it and save a new one to keep checks reliable.", 10000, "error");
             }
           })
           .catch(() => { /* Token validation is informational only. */ });
@@ -129,10 +126,8 @@
   async function run(action: () => Promise<void>): Promise<void> {
     if (busy) return;
     busy = true;
-    error = "";
-    notice = "";
     try { await action(); }
-    catch (cause) { error = messageOf(cause); }
+    catch (cause) { showSnackbar(messageOf(cause), 6000, "error"); }
     finally { busy = false; }
   }
 
@@ -141,18 +136,12 @@
     const attempt = ++githubAttempt;
     busy = true;
     githubBusy = true;
-    githubError = "";
-    githubNotice = "";
-    error = "";
-    notice = "";
     connectionStatus = "Connecting to GitHub…";
     try {
       await action();
-      if (attempt === githubAttempt) githubNotice = notice;
     } catch (cause) {
       if (attempt === githubAttempt) {
-        githubError = messageOf(cause);
-        error = githubError;
+        showSnackbar(messageOf(cause), 6000, "error");
       }
     } finally {
       if (attempt === githubAttempt) {
@@ -169,11 +158,11 @@
     githubAttempt++;
     try {
       await invoke("github_cancel_request");
-      githubNotice = connectionStatus.startsWith("Uploading")
+      showSnackbar(connectionStatus.startsWith("Uploading")
         ? "Cancelled. An upload already received by GitHub may still have been saved."
-        : "Cancelled.";
+        : "Cancelled.");
     } catch (cause) {
-      githubError = messageOf(cause);
+      showSnackbar(messageOf(cause), 6000, "error");
     } finally {
       connectionStatus = "";
       githubBusy = false;
@@ -183,12 +172,17 @@
   }
 
   async function backupContent(): Promise<string> {
-    return JSON.stringify(createBackup(localStorage, await isEnabled()), null, 2);
+    return JSON.stringify(createBackup({
+      sources: getSettings().sources,
+      backgroundEnabled: getSettings().backgroundEnabled,
+      mainBackups: getSettings().mainBackups,
+      plugins: getSettings().plugins,
+    }, await isEnabled()), null, 2);
   }
 
   async function exportJson(): Promise<void> {
     const saved = await invoke<boolean>("export_settings_file", { content: await backupContent() });
-    if (saved) notice = "JSON backup saved.";
+    if (saved) showSnackbar("JSON backup saved.");
   }
 
   function previewImport(content: string, preferences = true): void {
@@ -206,26 +200,27 @@
   async function applyImport(): Promise<void> {
     if (!pendingBackup) return;
     const backup = pendingBackup;
-    const oldSources = localStorage.getItem(sourcesKey);
-    const oldBackground = localStorage.getItem(backgroundKey);
+    const oldSettings = JSON.parse(JSON.stringify(getSettings())) as Settings;
     const previousAutostart = await isEnabled();
-    const previousBackground = oldBackground === "true";
-    const current = importMode === "merge" ? JSON.parse(oldSources ?? "[]") : [];
+    const previousBackground = getSettings().backgroundEnabled;
+    const current = importMode === "merge" ? getSettings().sources : [];
     const nextSources = restoreSources(backup, current, importMode);
-    const serialized = JSON.stringify(nextSources);
     try {
       if (applyPreferences) {
         if (backup.settings.startOnLogin) await enable(); else await disable();
         await invoke("set_background_mode", { enabled: backup.settings.backgroundEnabled });
-        localStorage.setItem(backgroundKey, String(backup.settings.backgroundEnabled));
       }
-      localStorage.setItem(sourcesKey, serialized);
+      await updateSettings((current) => ({
+        ...current,
+        sources: nextSources,
+        backgroundEnabled: applyPreferences ? backup.settings.backgroundEnabled : current.backgroundEnabled,
+        startOnLogin: applyPreferences ? backup.settings.startOnLogin : current.startOnLogin,
+        mainBackups: backup.settings.mainBackups ? { ...current.mainBackups, ...backup.settings.mainBackups } : current.mainBackups,
+        plugins: backup.settings.plugins ? { ...current.plugins, ...backup.settings.plugins } : current.plugins,
+      }));
     } catch (cause) {
       const rollbackErrors: string[] = [];
-      try {
-        if (oldSources === null) localStorage.removeItem(sourcesKey); else localStorage.setItem(sourcesKey, oldSources);
-        if (oldBackground === null) localStorage.removeItem(backgroundKey); else localStorage.setItem(backgroundKey, oldBackground);
-      } catch (rollback) { rollbackErrors.push(messageOf(rollback)); }
+      try { await updateSettings(() => oldSettings); } catch (rollback) { rollbackErrors.push(messageOf(rollback)); }
       if (applyPreferences) {
         for (const restore of [
           () => previousAutostart ? enable() : disable(),
@@ -241,7 +236,7 @@
       startOnLogin = backup.settings.startOnLogin;
     }
     pendingBackup = null;
-    notice = `Import complete. ${nextSources.length} apps in your catalog. Return to Apps to check their releases on this computer.`;
+    showSnackbar(`Import complete. ${nextSources.length} apps in your catalog. Return to Apps to check their releases on this computer.`);
   }
 
   async function loadGists(): Promise<void> {
@@ -252,7 +247,7 @@
     gists = loaded;
     cacheGists(login, loaded);
     backupsLoaded = true;
-    const remembered = localStorage.getItem(mainBackupKey(login));
+    const remembered = getSettings().mainBackups[login.toLowerCase()] ?? "";
     selectMainBackup(chooseMainBackup(gists, remembered));
   }
 
@@ -263,8 +258,12 @@
     showRestore = false;
     revisions = [];
     selectedRevision = "";
-    if (id) localStorage.setItem(mainBackupKey(login), id);
-    else localStorage.removeItem(mainBackupKey(login));
+    void updateSettings((current) => {
+      const mainBackups = { ...current.mainBackups };
+      if (id) mainBackups[login.toLowerCase()] = id;
+      else delete mainBackups[login.toLowerCase()];
+      return { ...current, mainBackups };
+    });
   }
 
   async function prepareUpdate(): Promise<void> {
@@ -298,7 +297,7 @@
     login = account.login;
     connectionStatus = `Connected as ${login}. Loading backups…`;
     await loadGists();
-    notice = `Connected as ${login}.`;
+    showSnackbar(`Connected as ${login}.`);
   }
 
   async function disconnect(): Promise<void> {
@@ -313,19 +312,17 @@
     showRestore = false;
     revisions = [];
     expectedRevision = "";
-    notice = "Disconnected from GitHub on this device.";
+    showSnackbar("Disconnected from GitHub on this device.");
   }
 
   async function runApiToken(action: () => Promise<void>): Promise<void> {
     if (busy) return;
     busy = true;
     apiTokenBusy = true;
-    apiTokenError = "";
-    apiTokenNotice = "";
     try {
       await action();
     } catch (cause) {
-      apiTokenError = messageOf(cause);
+      showSnackbar(messageOf(cause), 6000, "error");
     } finally {
       busy = false;
       apiTokenBusy = false;
@@ -338,7 +335,7 @@
       await invoke("github_api_token_save", { accessToken: token });
       apiToken = "";
       apiTokenSaved = true;
-      apiTokenNotice = "Token saved. Release and update checks will now use it.";
+      showSnackbar("Token saved. Release and update checks will now use it.");
     });
   }
 
@@ -346,7 +343,7 @@
     await runApiToken(async () => {
       await invoke("github_api_token_clear");
       apiTokenSaved = false;
-      apiTokenNotice = "GitHub API token removed. Checks fall back to anonymous requests.";
+      showSnackbar("GitHub API token removed. Checks fall back to anonymous requests.");
     });
   }
 
@@ -364,7 +361,7 @@
     confirmUpload = false;
     selectMainBackup(gist.id);
     await loadGists();
-    notice = `Backup saved to a ${gist.public ? "public" : "secret"} GitHub gist: https://gist.github.com/${gist.id}`;
+    showSnackbar(`Backup saved to a ${gist.public ? "public" : "secret"} GitHub gist: https://gist.github.com/${gist.id}`);
   }
 
   async function downloadGist(): Promise<void> {
@@ -382,35 +379,34 @@
   }
 
   onMount(async () => {
-    backgroundEnabled = localStorage.getItem(backgroundKey) === "true";
+    await loadSettings();
+    backgroundEnabled = getSettings().backgroundEnabled;
     try {
       startOnLogin = await isEnabled();
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : String(cause);
+      showSnackbar(messageOf(cause), 6000, "error");
     } finally {
       ready = true;
     }
   });
 
   async function setBackgroundEnabled(enabled: boolean): Promise<void> {
-    error = "";
     try {
       await invoke("set_background_mode", { enabled });
-      localStorage.setItem(backgroundKey, String(enabled));
+      await updateSettings((current) => ({ ...current, backgroundEnabled: enabled }));
       backgroundEnabled = enabled;
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : String(cause);
+      showSnackbar(messageOf(cause), 6000, "error");
     }
   }
 
   async function setStartOnLogin(enabled: boolean): Promise<void> {
-    error = "";
     try {
       if (enabled) await enable();
       else await disable();
       startOnLogin = enabled;
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : String(cause);
+      showSnackbar(messageOf(cause), 6000, "error");
     }
   }
 </script>
@@ -441,11 +437,6 @@
         <p>App behavior, backups, and migration</p>
         </div>
       </div>
-
-      {#if error}
-        <div class="error-notice" role="alert">{error}</div>
-      {/if}
-      {#if notice}<div class="notice" role="status">{notice}</div>{/if}
 
       <section class="settings-group" class:review-dimmed={!!pendingBackup} inert={!!pendingBackup} aria-labelledby="startup-heading">
         <h2 id="startup-heading">App behavior</h2>
@@ -527,8 +518,6 @@
         <h2 id="github-heading">GitHub Gist backups</h2>
         <div class="group-body">
           <p>Save and restore the same JSON backup through your GitHub account, or share your app catalog with a gist link.</p>
-          {#if githubError}<div class="error-notice" role="alert">{githubError}</div>{/if}
-          {#if githubNotice}<div class="notice" role="status">{githubNotice}</div>{/if}
           {#if githubBusy}<p role="status" aria-live="polite">{connectionStatus || "Working with GitHub…"}</p>{/if}
           {#if login}
             <div class="account-row"><strong>Connected as {login}</strong><button class="secondary" disabled={busy} onclick={() => runGithub(disconnect)}>Disconnect</button></div>
@@ -614,8 +603,6 @@
         <h2 id="api-token-heading">GitHub API token</h2>
         <div class="group-body">
           <p>Release and update checks contact the GitHub API. In some regions or behind some networks, GitHub blocks unauthenticated requests. A personal access token keeps those checks reliable. This is separate from the gist-backup sign-in and does not need the gist scope.</p>
-          {#if apiTokenError}<div class="error-notice" role="alert">{apiTokenError}</div>{/if}
-          {#if apiTokenNotice}<div class="notice" role="status">{apiTokenNotice}</div>{/if}
           {#if apiTokenSaved}
             <div class="account-row">
               <strong>A GitHub API token is saved on this device</strong>
@@ -676,7 +663,6 @@
   .additional-backup summary { cursor: pointer; color: var(--muted); }
   .upload-confirm { margin-top: 18px; padding: 4px 16px 16px; border: 1px solid var(--border); border-radius: 16px; overflow-wrap: anywhere; }
   .group-body .warning { color: #b45309; }
-  .notice { margin: 0 0 16px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); line-height: 1.5; }
   .busy-status { color: var(--muted); }
   .content { width: min(880px, 100%); margin: 0 auto; padding: 72px 52px 60px; }
   .page-heading { display: flex; align-items: center; gap: 15px; margin-bottom: 34px; }
@@ -708,7 +694,6 @@
   .material-switch input:focus-visible + .switch-track { outline: 3px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 3px; }
   .material-switch input:disabled { cursor: wait; }
   .material-switch input:disabled + .switch-track { opacity: .55; }
-  .error-notice { max-width: 760px; margin: 0 0 16px; padding: 12px 16px; border: 1px solid #f2d5d5; border-radius: 12px; background: #fff5f4; color: #a03e3a; line-height: 1.5; }
   @media (max-width: 760px) {
     .content { padding: 48px 20px 40px; }
     .page-heading { margin-bottom: 24px; }

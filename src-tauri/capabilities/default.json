@@ -28,6 +28,64 @@
       "identifier": "fs:allow-read-text-file",
       "allow": [
         {
+          "path": "$APPCONFIG/settings.json"
+        },
+        {
+          "path": "$APPCONFIG/keymap.json"
+        },
+        {
+          "path": "$APPCONFIG/plugins/**"
+        }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [
+        {
+          "path": "$APPCONFIG/settings.json"
+        },
+        {
+          "path": "$APPCONFIG/keymap.json"
+        }
+      ]
+    },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [
+        {
+          "path": "$APPCONFIG/plugins"
+        },
+        {
+          "path": "$APPCONFIG/settings.json"
+        },
+        {
+          "path": "$APPCONFIG/keymap.json"
+        }
+      ]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [
+        {
+          "path": "$APPCONFIG/plugins/*.js"
+        }
+      ]
+    },
+    {
+      "identifier": "fs:allow-copy-file",
+      "allow": [
+        {
+          "path": "**"
+        }
+      ]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [
+        {
+          "path": "$APPCONFIG/plugins"
+        },
+        {
           "path": "$APPCONFIG/plugins/**"
         }
       ]
@@ -37,6 +95,12 @@
       "allow": [
         {
           "path": "$APPCACHE/**"
+        },
+        {
+          "path": "$APPCONFIG/settings.json"
+        },
+        {
+          "path": "$APPCONFIG/keymap.json"
         }
       ]
     }
