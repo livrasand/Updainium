@@ -79,6 +79,10 @@ Bug reports, documentation, translations, tests and plugin ideas are welcome.
 - Browse [good first issues](https://github.com/livrasand/Updainium/issues)
 - Start a discussion in [Discussions](https://github.com/livrasand/Updainium/discussions)
 
+You can use GitHub Codespaces for online development:
+
+[![][codespaces-shield]][codespaces-link]
+
 ---
 
 > [!IMPORTANT]
@@ -106,3 +110,6 @@ Bug reports, documentation, translations, tests and plugin ideas are welcome.
 <a href="https://github.com/livrasand/Updainium/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=livrasand/Updainium" />
 </a>
+
+[codespaces-link]: https://codespaces.new/livrasand/Updainium
+[codespaces-shield]: https://github.com/codespaces/badge.svg
