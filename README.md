@@ -2,7 +2,7 @@
 
 # [Updainium](https://github.com/livrasand/Updainium)
 
-Get release files straight from the source.
+Install and update desktop apps directly from their official releases.
 
 [![Downloads](https://img.shields.io/github/downloads/livrasand/Updainium/total)](https://github.com/livrasand/Updainium/releases)
 
@@ -19,10 +19,10 @@ It has a lot of things going for it:
 - Decent performance.
 - Cross-platform support for macOS, Linux and Windows.
 - No AI integration or monetization scheme.
-- No telemetry or proprietary server component.
+- No telemetry, proprietary server component, no accounts or subscription.
 - No involuntary auto updates.
 - Tries not to install anything without explicit permission.
-- Works seamlessly with GitHub, GitLab, Gitea, Forgejo, and compatible services.
+- Works seamlessly with GitHub, GitLab, Gitea, Forgejo, and compatible services or commands through local plugins.
 - Add new forges or commands with a local plugin. See [Providers and plugins](docs/providers.md).
 - Set your preferred file type (e.g., `.exe`, `.dmg`, `.AppImage`, `.deb`) and Updainium automatically selects the appropriate release asset.
 - No middlemen or third-party repositories. You download exactly what the developer published.
@@ -51,15 +51,19 @@ We promise:
 - NO SUBSCRIPTIONS
 - NO AUTOMATIC INSTALLATION OR UPDATES
 
-> [!IMPORTANT]
-> **macOS Users:** You may see a warning that Apple cannot verify Updainium. This happens because the app is distributed outside the App Store and is not notarized yet. Allow it via System Settings → Privacy & Security → Open Anyway.
-
-> [!IMPORTANT]
-> **Linux Users:** Updainium disables WebKitGTK's DMABUF renderer by default because it can display horizontal rendering artifacts on some distributions and GPU drivers.
-
-
 ## Limitations
 - For some sources that lack standardized APIs, Updainium gathers data using web scraping. This means tracking can occasionally break if the source website changes its design. In these specific edge cases, more reliable methods may temporarily be unavailable. See [LEGAL.md](LEGAL.md): users are responsible for evaluating the software they choose to download and run.
+- macOS builds are not yet notarized, so macOS may show a security warning. Approve the app in **System Settings → Privacy & Security → Open Anyway**.
+- On some Linux setups, WebKitGTK’s DMABUF renderer is disabled by default to avoid rendering artifacts.
+
+## Quick start
+
+1. Install Updainium.
+2. Click **Add app**.
+3. Paste a repository URL, for example:
+   `https://github.com/livrasand/Updainium`
+4. Choose the asset type you prefer, such as `.exe`, `.dmg`, `.AppImage` or `.deb`.
+5. Enable update checks and install updates only when you approve them.
 
 ## Screenshots
 
@@ -67,10 +71,18 @@ We promise:
 | ------------------------------------------------------ | ----------------------------------------------------------------------- |
 | <picture><source srcset="./static/3-dark.png" media="(prefers-color-scheme: dark)" /> <img src="./static/3.png" alt="Add App Page" /></picture> | <picture><source srcset="./static/4-dark.png" media="(prefers-color-scheme: dark)" /> <img src="./static/4.png" alt="Settings Page" /></picture> |
 
+## Contributing
+
+Bug reports, documentation, translations, tests and plugin ideas are welcome.
+
+- Read [CONTRIBUTING.md](CONTRIBUTING.md)
+- Browse [good first issues](https://github.com/livrasand/Updainium/issues)
+- Start a discussion in [Discussions](https://github.com/livrasand/Updainium/discussions)
+
 ---
 
 > [!IMPORTANT]
-> Upvote Updainium on [AlternativeTo](https://alternativeto.net/software/updainium/), [Product Hunt](https://www.producthunt.com/products/updainium) to help me promote it.
+> If Updainium saves you time, consider giving it a star, sharing it with someone who manages desktop apps, or upvoting it on [AlternativeTo](https://alternativeto.net/software/updainium/), [Product Hunt](https://www.producthunt.com/products/updainium) to help me promote it.
 
 [![Share](https://img.shields.io/badge/share-000000?logo=x&logoColor=white)](https://x.com/intent/tweet?text=Check%20out%20this%20project%20on%20GitHub:%20https://github.com/livrasand/Updainium)
 [![Share](https://img.shields.io/badge/share-1877F2?logo=facebook&logoColor=white)](https://www.facebook.com/sharer/sharer.php?u=https://github.com/livrasand/Updainium)
