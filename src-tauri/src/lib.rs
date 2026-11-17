@@ -164,10 +164,54 @@ pub fn run() {
             uninstall_app,
             download_release_asset,
             fetch_release_metadata,
-            fetch_repository_icon
+            fetch_repository_icon,
+            open_in_editor
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[tauri::command]
+fn open_in_editor(path: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("open")
+            .arg("-t")
+            .arg(&path)
+            .status()
+            .map_err(|error| error.to_string())?;
+        if status.success() {
+            return Ok(());
+        }
+        Command::new("open")
+            .arg("-e")
+            .arg(&path)
+            .status()
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/c", "start", "notepad", &path])
+            .status()
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(editor) = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")) {
+            if Command::new(editor).arg(&path).spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        for editor in ["xdg-open", "gnome-text-editor", "gedit", "kate", "xed", "mousepad", "nano"] {
+            if Command::new(editor).arg(&path).spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
 }
 
 fn show_main_window(app: &tauri::AppHandle) {

@@ -14,6 +14,14 @@
   import { listInstalledPlugins, loadUserPlugins } from "$lib/registry";
   import { hideSnackbar, showSnackbar, snackbar } from "$lib/snackbar.svelte";
   import {
+    getActiveThemeName,
+    initThemeSystem,
+    installLocalTheme,
+    listInstalledThemes,
+    setActiveTheme,
+    uninstallTheme,
+  } from "$lib/themes";
+  import {
     eventToCombo,
     findCommandForKeymap,
     getActiveKeymap,
@@ -23,6 +31,21 @@
   import { getSettings, loadSettings } from "$lib/settings.svelte";
 
   let { children }: { children: Snippet } = $props();
+  let copied = $state(false);
+
+  async function copyErrorMessage(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(snackbar.message);
+      copied = true;
+      setTimeout(() => {
+        copied = false;
+      }, 2000);
+    } catch {}
+  }
+
+  onMount(() => {
+    void initThemeSystem();
+  });
 
   onMount(() => {
     const window = getCurrentWindow();
@@ -97,6 +120,34 @@
         run: uninstallPlugin,
       }),
       registerCommand({
+        id: "themes.installLocal",
+        title: "Install local theme…",
+        category: "Themes",
+        keywords: ["theme", "css", "style", "install"],
+        run: installThemeHandler,
+      }),
+      registerCommand({
+        id: "themes.listInstalled",
+        title: "List installed themes",
+        category: "Themes",
+        keywords: ["theme", "installed", "show", "css"],
+        run: listThemesHandler,
+      }),
+      registerCommand({
+        id: "themes.select",
+        title: "Select theme…",
+        category: "Themes",
+        keywords: ["theme", "switch", "active", "apply"],
+        run: selectThemeHandler,
+      }),
+      registerCommand({
+        id: "themes.uninstall",
+        title: "Uninstall theme…",
+        category: "Themes",
+        keywords: ["theme", "remove", "delete"],
+        run: uninstallThemeHandler,
+      }),
+      registerCommand({
         id: "config.openSettingsJson",
         title: "Open settings.json",
         category: "Advanced",
@@ -110,18 +161,34 @@
         keywords: ["config", "json", "shortcuts", "raw"],
         run: () => openConfigFile("keymap.json"),
       }),
+      registerCommand({
+        id: "config.openStylesCss",
+        title: "Open styles.css",
+        category: "Advanced",
+        keywords: ["styles", "css", "custom", "theme"],
+        run: () => openConfigFile("styles.css"),
+      }),
+      registerCommand({
+        id: "config.openInitJs",
+        title: "Open init.js",
+        category: "Advanced",
+        keywords: ["init", "js", "script", "startup"],
+        run: () => openConfigFile("init.js"),
+      }),
     ];
     return () => disposers.forEach((dispose) => dispose());
   });
 
-  async function openConfigFile(name: "settings.json" | "keymap.json"): Promise<void> {
+  async function openConfigFile(
+    name: "settings.json" | "keymap.json" | "styles.css" | "init.js" | "theme",
+  ): Promise<void> {
     const dir = await appConfigDir();
     const filePath = `${dir}/${name}`;
     if (!(await exists(filePath))) {
       await mkdir(dir, { recursive: true });
-      await writeTextFile(filePath, "{}");
+      await writeTextFile(filePath, name.endsWith(".json") ? "{}" : "");
     }
-    await openPath(filePath);
+    await invoke("open_in_editor", { path: filePath }).catch(() => openPath(filePath));
   }
 
   async function listPlugins(): Promise<void> {
@@ -176,6 +243,77 @@
     await loadUserPlugins();
     showSnackbar(`Plugin installed and loaded: ${name}`);
   }
+
+  async function installThemeHandler(): Promise<void> {
+    const selected = await openFileDialog({
+      multiple: false,
+      filters: [{ name: "CSS theme", extensions: ["css"] }],
+    });
+    if (!selected || Array.isArray(selected)) return;
+    const name = await installLocalTheme(selected);
+    showSnackbar(`Theme installed and applied: ${name}`);
+  }
+
+  async function listThemesHandler(): Promise<void> {
+    const themes = await listInstalledThemes();
+    const active = await getActiveThemeName();
+    const message = themes.length
+      ? `Installed themes:\n${themes.map((t) => (t === active ? `${t} (active)` : t)).join("\n")}`
+      : "No custom themes are installed.";
+    showSnackbar(message, 10000);
+  }
+
+  async function selectThemeHandler(): Promise<void> {
+    const themes = await listInstalledThemes();
+    if (!themes.length) {
+      showSnackbar("No custom themes are installed. Install a theme first.");
+      return;
+    }
+    const configDirectory = await appConfigDir();
+    const themeDirectory = `${configDirectory.replace(/[\\/]+$/, "")}/themes`;
+    const selected = await openFileDialog({
+      defaultPath: themeDirectory,
+      multiple: false,
+      filters: [{ name: "CSS theme", extensions: ["css"] }],
+    });
+    if (!selected || Array.isArray(selected)) return;
+    const name = selected.split(/[\\/]/).pop();
+    if (!name || !themes.includes(name)) {
+      throw new Error("Choose a theme from the installed themes folder.");
+    }
+    await setActiveTheme(name);
+    showSnackbar(`Active theme set to: ${name}`);
+  }
+
+  async function uninstallThemeHandler(): Promise<void> {
+    const themes = await listInstalledThemes();
+    if (!themes.length) {
+      showSnackbar("No custom themes are installed.");
+      return;
+    }
+
+    const configDirectory = await appConfigDir();
+    const themeDirectory = `${configDirectory.replace(/[\\/]+$/, "")}/themes`;
+    const selected = await openFileDialog({
+      defaultPath: themeDirectory,
+      multiple: false,
+      filters: [{ name: "CSS theme", extensions: ["css"] }],
+    });
+    if (!selected || Array.isArray(selected)) return;
+
+    const selectedPath = selected.replace(/\\/g, "/");
+    const themePathPrefix = `${themeDirectory.replace(/\\/g, "/")}/`;
+    const name = selectedPath.startsWith(themePathPrefix)
+      ? selectedPath.slice(themePathPrefix.length)
+      : "";
+    if (!name || name.includes("/") || !themes.includes(name)) {
+      throw new Error("Choose a theme from the installed themes folder.");
+    }
+    if (!confirm(`Uninstall ${name}?`)) return;
+
+    await uninstallTheme(name);
+    showSnackbar(`Theme uninstalled: ${name}`);
+  }
 </script>
 
 {@render children()}
@@ -190,6 +328,11 @@
     transition:fly={{ y: 16, duration: 200 }}
   >
     <span class="snackbar-label">{snackbar.message}</span>
+    {#if snackbar.kind === "error"}
+      <button class="snackbar-action" type="button" onclick={copyErrorMessage}>
+        {copied ? "Copied" : "Copy"}
+      </button>
+    {/if}
     <button class="snackbar-action" type="button" onclick={hideSnackbar}>Dismiss</button>
   </div>
 {/if}
