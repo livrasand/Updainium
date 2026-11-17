@@ -5,21 +5,76 @@ const THEME_STYLE_ID = "updainium-active-theme";
 const CUSTOM_STYLE_ID = "updainium-custom-styles";
 const BASE_VARS_STYLE_ID = "updainium-base-variables";
 
-const BASE_VARIABLES_CSS = `
-:root {
-  --up-bg: var(--page);
-  --up-surface: var(--surface);
-  --up-surface-raised: var(--surface-raised);
-  --up-surface-muted: var(--surface-muted);
-  --up-text: var(--text);
-  --up-muted: var(--muted);
-  --up-subtle: var(--subtle);
-  --up-border: var(--border);
-  --up-accent: var(--accent);
+const THEME_BRIDGE_CSS = `
+:root, html, body {
+  --page: var(--up-bg) !important;
+  --surface: var(--up-surface) !important;
+  --surface-raised: var(--up-surface-raised, var(--up-surface)) !important;
+  --surface-muted: var(--up-surface-muted, var(--up-surface)) !important;
+  --text: var(--up-text) !important;
+  --muted: var(--up-muted) !important;
+  --subtle: var(--up-subtle) !important;
+  --border: var(--up-border) !important;
+  --accent: var(--up-accent) !important;
+  --accent-strong: var(--up-accent) !important;
 }
 body {
-  background-color: var(--up-bg);
-  color: var(--up-text);
+  background-color: var(--up-bg) !important;
+  color: var(--up-text) !important;
+}
+.app-shell, .main-content, .sidebar {
+  background-color: var(--up-bg) !important;
+  border-color: var(--up-border) !important;
+  color: var(--up-text) !important;
+}
+.topbar {
+  background-color: color-mix(in srgb, var(--up-bg) 88%, transparent) !important;
+  border-color: var(--up-border) !important;
+}
+.system-card, .app-card, .detail-card, .detail-actions, .settings-group {
+  background-color: var(--up-surface) !important;
+  border-color: var(--up-border) !important;
+  color: var(--up-text) !important;
+}
+.summary-card, .empty-filter, .empty-state {
+  background-color: var(--up-surface-raised, var(--up-surface)) !important;
+  border-color: var(--up-border) !important;
+  color: var(--up-text) !important;
+}
+.search-box {
+  background-color: var(--up-surface-muted, var(--up-surface)) !important;
+  border-color: var(--up-border) !important;
+  color: var(--up-text) !important;
+}
+.search-box input {
+  color: var(--up-text) !important;
+}
+.brand, h1, h2, .app-name, .system-card strong, .summary-card strong, .setting-copy strong {
+  color: var(--up-text) !important;
+}
+.sidebar-label, .system-label, .summary-label, .list-count, .repo-link, .breadcrumb, .crumb-slash, .setting-copy span {
+  color: var(--up-subtle) !important;
+}
+.nav-item {
+  color: var(--up-muted) !important;
+}
+.nav-item.active {
+  color: var(--up-accent) !important;
+  background-color: var(--up-surface-muted, var(--up-surface)) !important;
+}
+.summary-icon.purple {
+  background-color: var(--up-surface-muted, var(--up-surface)) !important;
+  color: var(--up-accent) !important;
+}
+.primary-button, .detail-install-button {
+  background-color: var(--up-accent) !important;
+  border-color: var(--up-accent) !important;
+  color: var(--up-bg) !important;
+}
+.field input, .field select {
+  background-color: var(--up-surface-raised, var(--up-surface)) !important;
+  border-color: var(--up-border) !important;
+  color: var(--up-text) !important;
 }
 `;
 
@@ -36,12 +91,17 @@ function getOrCreateStyleElement(id: string): HTMLStyleElement | null {
 
 export function injectBaseVariables(): void {
   const element = getOrCreateStyleElement(BASE_VARS_STYLE_ID);
-  if (element) element.textContent = BASE_VARIABLES_CSS;
+  if (element) element.textContent = "";
 }
 
 export function injectThemeCss(css: string): void {
   const element = getOrCreateStyleElement(THEME_STYLE_ID);
-  if (element) element.textContent = css;
+  if (!element) return;
+  if (css.trim()) {
+    element.textContent = css + THEME_BRIDGE_CSS;
+  } else {
+    element.textContent = "";
+  }
 }
 
 export function injectCustomCss(css: string): void {
@@ -211,7 +271,7 @@ export async function loadInitScript(): Promise<void> {
 }
 
 export async function installLocalTheme(sourcePath: string): Promise<string> {
-  const name = sourcePath.split(/[\\/]/).pop();
+  const name = sourcePath.split(/[\\\/]/).pop();
   if (!name || !name.endsWith(".css")) throw new Error("Choose a .css theme file.");
   await mkdir("themes", { baseDir: BaseDirectory.AppConfig, recursive: true });
   await copyFile(sourcePath, `themes/${name}`, { toPathBaseDir: BaseDirectory.AppConfig });
