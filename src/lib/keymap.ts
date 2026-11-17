@@ -8,7 +8,7 @@ export const defaultKeymap: Keymap = {
   "source.check": "ctrl+shift+u",
 };
 
-const isMac =
+export const isMac =
   typeof navigator !== "undefined" && /mac|iphone|ipad|ipod/i.test(navigator.platform);
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -67,9 +67,22 @@ export async function loadKeymap(): Promise<Keymap> {
 }
 
 let activeKeymap: Keymap = {};
+let pluginKeymap: Keymap = {};
+
+export function registerKeybinding(command: string, combo: string): () => void {
+  const normalized = normalizeCombo(combo);
+  if (!normalized) return () => {};
+  pluginKeymap[command] = normalized;
+  activeKeymap[command] = normalized;
+  return () => {
+    delete pluginKeymap[command];
+    delete activeKeymap[command];
+  };
+}
 
 export async function initKeymap(): Promise<Keymap> {
-  activeKeymap = await loadKeymap();
+  const loaded = await loadKeymap();
+  activeKeymap = { ...pluginKeymap, ...loaded };
   return activeKeymap;
 }
 

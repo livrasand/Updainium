@@ -21,6 +21,18 @@
         },
         {
           "path": "$APPCONFIG/plugins/**"
+        },
+        {
+          "path": "plugins"
+        },
+        {
+          "path": "plugins/**"
+        },
+        {
+          "path": "./plugins"
+        },
+        {
+          "path": "./plugins/**"
         }
       ]
     },
@@ -35,6 +47,12 @@
         },
         {
           "path": "$APPCONFIG/plugins/**"
+        },
+        {
+          "path": "plugins/**"
+        },
+        {
+          "path": "./plugins/**"
         }
       ]
     },
@@ -56,10 +74,25 @@
           "path": "$APPCONFIG/plugins"
         },
         {
+          "path": "$APPCONFIG/plugins/**"
+        },
+        {
           "path": "$APPCONFIG/settings.json"
         },
         {
           "path": "$APPCONFIG/keymap.json"
+        },
+        {
+          "path": "plugins"
+        },
+        {
+          "path": "plugins/**"
+        },
+        {
+          "path": "./plugins"
+        },
+        {
+          "path": "./plugins/**"
         }
       ]
     },
