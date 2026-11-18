@@ -38,14 +38,8 @@
      stroke="#A6A6A6"
      stroke-width="5" />
 
-    <!-- Updainium icon -->
-  <svg
-     x="35"
-     y="30"
-     width="200"
-     height="200"
-     viewBox="0 0 512 512">
-
+  <!-- Updainium icon -->
+  <g transform="translate(35 30) scale(0.390625)">
     <path
        d="M256 120v162m-66-66 66 66 66-66M158 319v25a24 24 0 0 0 24 24h148a24 24 0 0 0 24-24v-25"
        fill="none"
@@ -53,7 +47,7 @@
        stroke-linecap="round"
        stroke-linejoin="round"
        stroke-width="27"/>
-  </svg>
+  </g>
 
   <text
      x="220"
