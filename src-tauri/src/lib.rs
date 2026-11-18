@@ -4,6 +4,7 @@ use std::{fs, io::Write, process::Command};
 mod backup;
 mod github;
 mod process;
+mod deep_link;
 use sha2::{Digest, Sha256};
 #[cfg(not(target_os = "macos"))]
 use tauri::menu::Submenu;
@@ -71,6 +72,10 @@ pub fn run() {
     tauri::Builder::default()
         .manage(github::GithubState::default())
         .manage(github::ApiTokenState::default())
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            deep_link::handle_urls(app, &argv);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -103,6 +108,8 @@ pub fn run() {
                 let app_menu = Submenu::new(app, "Updainium", true)?;
                 app.set_menu(Menu::with_items(app, &[&app_menu])?)?;
             }
+
+            deep_link::install(app);
 
             let open = MenuItem::with_id(app, "open", "Open Updainium", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
