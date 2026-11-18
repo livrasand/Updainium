@@ -1,0 +1,63 @@
+
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="646"
+   height="250"
+   viewBox="0 0 646 250"
+   role="img"
+   aria-labelledby="title desc"
+   xmlns="http://www.w3.org/2000/svg">
+
+  <title id="title">Add To Updainium</title>
+  <desc id="desc">Uniform monochrome app download badge.</desc>
+
+  <style>
+    .kicker {
+      font-family: "Helvetica Neue", Helvetica, sans-serif;
+      font-size: 30px;
+      font-weight: 400;
+      letter-spacing: 1.8px;
+      fill: #FFFFFF;
+    }
+
+    .name {
+      font-family: "Helvetica Neue", Helvetica, sans-serif;
+      font-size: 67px;
+      font-weight: 900;
+      fill: #FFFFFF;
+    }
+  </style>
+
+  <rect
+     x="42.5"
+     y="43.5"
+     width="561"
+     height="163"
+     rx="20"
+     fill="#000000"
+     stroke="#A6A6A6"
+     stroke-width="5" />
+
+  <!-- Updainium icon -->
+  <g transform="translate(35 30) scale(0.390625)">
+    <path
+       d="M256 120v162m-66-66 66 66 66-66M158 319v25a24 24 0 0 0 24 24h148a24 24 0 0 0 24-24v-25"
+       fill="none"
+       stroke="#fff"
+       stroke-linecap="round"
+       stroke-linejoin="round"
+       stroke-width="27"/>
+  </g>
+
+  <text
+     x="220"
+     y="96"
+     class="kicker">ADD TO</text>
+
+  <text
+     x="390"
+     y="170"
+     class="name"
+     text-anchor="middle">Updainium</text>
+
+</svg>
