@@ -37,10 +37,14 @@ jobs:
           sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev libwebkit2gtk-4.1-dev patchelf rpm
       - run: npm ci
       - run: npm run tauri -- build --bundles ${{ matrix.bundles }}
+        env:
+          # Let the macOS bundler lay out the DMG window (background and icon
+          # positions) instead of skipping it because of the CI environment.
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
       - name: Verify Linux glibc baseline
         if: runner.os == 'Linux'
         run: |
-          highest="$(objdump -T src-tauri/target/release/updaitium | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -n1)"
+          highest="$(objdump -T src-tauri/target/release/updainium | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -n1)"
           echo "Newest required glibc symbol: $highest"
           if [ "$(printf '%s\nGLIBC_2.35\n' "$highest" | sort -uV | tail -n1)" != "GLIBC_2.35" ]; then
             echo "The Linux binary requires $highest, which is newer than the supported GLIBC_2.35 baseline."

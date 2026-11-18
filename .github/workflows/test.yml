@@ -44,7 +44,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     env:
-      APP_NAME: updaitium
+      APP_NAME: updainium
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -67,6 +67,10 @@ jobs:
             xvfb imagemagick libwebkit2gtk-4.1-0 libayatana-appindicator3-1 xdg-user-dirs 'libasound2'
 
       - name: Build
+        env:
+          # Let the macOS bundler lay out the DMG window (background and icon
+          # positions) instead of skipping it because of the CI environment.
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
         run: |
           npm ci
           npm run tauri -- build --bundles ${{ matrix.bundles }}
@@ -84,7 +88,7 @@ jobs:
           Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
           sleep 2
           export DISPLAY=:99
-          ./src-tauri/target/release/updaitium >/dev/null 2>&1 &
+          ./src-tauri/target/release/updainium >/dev/null 2>&1 &
           APP_PID=$!
           sleep 20 # give the window time to show
           import -window root -density 96 evidence/screenshot-linux.png
@@ -112,14 +116,14 @@ jobs:
           sleep 20 # give the window time to show
           screencapture -x evidence/screenshot-macos.png
           osascript -e 'tell application "System Events" to get name of processes' >/dev/null || true
-          pkill "updaitium" 2>/dev/null || true
+          pkill "updainium" 2>/dev/null || true
           test -s evidence/screenshot-macos.png && echo macos=ok >> .verify
 
       - name: Launch and screenshot (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          APP_EXE: src-tauri/target/release/updaitium.exe
+          APP_EXE: src-tauri/target/release/updainium.exe
         run: |
           New-Item -ItemType Directory -Force -Path evidence | Out-Null
           "" | Out-File -FilePath .verify -Encoding ascii
@@ -132,7 +136,7 @@ jobs:
           $graphics = [System.Drawing.Graphics]::FromImage($bmp)
           $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
           $bmp.Save("evidence/screenshot-windows.png", [System.Drawing.Imaging.ImageFormat]::Png)
-          Get-Process -Name 'updaitium' -ErrorAction SilentlyContinue | Stop-Process
+          Get-Process -Name 'updainium' -ErrorAction SilentlyContinue | Stop-Process
           if ((Get-Item evidence/screenshot-windows.png).Length -gt 0) { "windows=ok" | Out-File -Append -Encoding ascii .verify }
 
       - name: Upload evidence
