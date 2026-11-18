@@ -52,6 +52,25 @@
         }
       }
     },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "English",
+          "Spanish"
+        ],
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "windows/header.bmp",
+        "sidebarImage": "windows/sidebar.bmp"
+      },
+      "wix": {
+        "language": "en-US",
+        "upgradeCode": "dc2d9251-a272-56eb-a2f7-795973c36fee",
+        "bannerPath": "windows/banner.bmp",
+        "dialogImagePath": "windows/dialog.bmp"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
