@@ -1,0 +1,17 @@
+/* Catppuccin Latte Theme for Updainium */
+:root {
+  /* Fondos principales */
+  --up-bg: #eff1f5;              /* Base (claro) */
+  --up-surface: #e6e9ef;         /* Mantle */
+  --up-surface-raised: #dce0e8;  /* Crust */
+  --up-surface-muted: #ccd0da;   /* Surface0 */
+
+  /* Textos */
+  --up-text: #4c4f69;            /* Text */
+  --up-muted: #5c5f77;           /* Subtext1 */
+  --up-subtle: #6c6f85;          /* Subtext0 */
+
+  /* Bordes y acentos */
+  --up-border: #bcc0cc;          /* Surface1 */
+  --up-accent: #8839ef;          /* Mauve */
+}
