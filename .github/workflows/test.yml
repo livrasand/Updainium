@@ -410,7 +410,7 @@ jobs:
 
           cat comment.md
 
-          gh issue comment "$ISSUE" -R "$REPO" --edit-last --create-if-new --body-file comment.md
+          gh issue comment "$ISSUE" -R "$REPO" --edit-last --create-if-none --body-file comment.md
 
           if [[ -f out/verify-evidence-macOS/.verify ]] && grep -q '^macos=ok$' out/verify-evidence-macOS/.verify && \
              [[ -f out/verify-evidence-Linux/.verify ]] && grep -q '^linux=ok$'  out/verify-evidence-Linux/.verify  && \
