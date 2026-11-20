@@ -284,52 +284,57 @@ jobs:
             exit 0
           fi
 
-          # Draft releases are invisible to the /releases/tags/{tag} endpoint
-          # (and therefore unreliable to resolve by tag in gh), so everything
-          # here works with the release ID obtained from the list endpoint,
-          # which does include drafts. The lookup first makes the step
-          # idempotent on re-runs of the same run ID.
-          RELEASE_ID="$(gh api "repos/${REPO}/releases?per_page=100" \
+          if ! (
+            set -e
+            # Draft releases are invisible to the /releases/tags/{tag} endpoint
+            # (and therefore unreliable to resolve by tag in gh), so everything
+            # here works with the release ID obtained from the list endpoint,
+            # which does include drafts. The lookup first makes the step
+            # idempotent on re-runs of the same run ID.
+            RELEASE_ID="$(gh api "repos/${REPO}/releases?per_page=100" \
             --jq ".[] | select(.tag_name == \"${RELEASE_TAG}\") | .id")"
-          if [[ -z "$RELEASE_ID" ]]; then
+            if [[ -z "$RELEASE_ID" ]]; then
             RELEASE_ID="$(gh api --method POST "repos/${REPO}/releases" \
-              -f tag_name="$RELEASE_TAG" \
-              -f target_commitish="$SHA" \
-              -f name="CI screenshots (run ${GITHUB_RUN_ID})" \
-              -f body="Updainium verification screenshots, used in issues" \
-              -F draft=true --jq .id)"
-          fi
-          test -n "$RELEASE_ID"
-
-          for f in "${pngs[@]}"; do
+            -f tag_name="$RELEASE_TAG" \
+            -f name="CI screenshots (run ${GITHUB_RUN_ID})" \
+            -f body="Updainium verification screenshots, used in issues" \
+            -F draft=true --jq .id)"
+            fi
+            test -n "$RELEASE_ID"
+            
+            for f in "${pngs[@]}"; do
             [ -f "$f" ] || continue
             base="$(basename "$f" .png)"
             case "$base" in
-              screenshot-macos)   os=macos;   kind=app ;;
-              installer-macos)    os=macos;   kind=installer ;;
-              screenshot-linux)   os=linux;   kind=app ;;
-              installer-linux)    os=linux;   kind=installer ;;
-              screenshot-windows) os=windows; kind=app ;;
-              installer-windows)  os=windows; kind=installer ;;
-              screenshot-*)       os="${base#screenshot-}"; kind=app ;;
-              installer-*)        os="${base#installer-}";  kind=installer ;;
-              *)                  os="$base"; kind=app ;;
+            screenshot-macos)   os=macos;   kind=app ;;
+            installer-macos)    os=macos;   kind=installer ;;
+            screenshot-linux)   os=linux;   kind=app ;;
+            installer-linux)    os=linux;   kind=installer ;;
+            screenshot-windows) os=windows; kind=app ;;
+            installer-windows)  os=windows; kind=installer ;;
+            screenshot-*)       os="${base#screenshot-}"; kind=app ;;
+            installer-*)        os="${base#installer-}";  kind=installer ;;
+            *)                  os="$base"; kind=app ;;
             esac
             mime="$(file -b --mime-type "$f")"
             [[ "$mime" == image/png ]] || continue
             name="verify-${ISSUE}-${GITHUB_RUN_ID:0:8}-${base}.png"
             cp "$f" "$name"
             gh api --method POST \
-              "repos/${REPO}/releases/${RELEASE_ID}/assets?name=${name}" \
-              -H "Content-Type: application/octet-stream" \
-              --input "$name" --jq .name >/dev/null
+            "repos/${REPO}/releases/${RELEASE_ID}/assets?name=${name}" \
+            -H "Content-Type: application/octet-stream" \
+            --input "$name" --jq .name >/dev/null
             url="https://github.com/$REPO/releases/download/${RELEASE_TAG}/${name}"
             printf '%s\t%s\t%s\n' "$os" "$kind" "$url" >> images.txt
-          done
-
-          # Publish the draft so asset URLs are publicly accessible from the issue.
-          gh api -X PATCH "repos/${REPO}/releases/${RELEASE_ID}" -F draft=false >/dev/null
-
+            done
+            
+            # Publish the draft so asset URLs are publicly accessible from the issue.
+            gh api -X PATCH "repos/${REPO}/releases/${RELEASE_ID}" -F draft=false >/dev/null
+            
+          ); then
+            echo "Release upload failed; continuing without screenshots."
+            : > images.txt
+          fi
           cat images.txt
 
       - name: Compose the comment and update the issue
