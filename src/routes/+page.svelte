@@ -26,6 +26,10 @@
     received: number;
     total: number | null;
   };
+  type DeepLinkAction = {
+    kind: "open" | "add" | "app" | "apps" | "refresh";
+    payload: string | null;
+  };
   type RunningAppStateEvent = {
     running: boolean;
     launchPath?: string | null;
@@ -210,6 +214,39 @@
         ...sources.map((source) => checkInstalled(source)),
       ]);
     }
+  });
+
+  function applyDeepLinkAction(action: DeepLinkAction): void {
+    if (action.kind !== "add" || !action.payload) return;
+    editingSourceId = null;
+    sourceAppIdentifier = "";
+    sourceExtension = "";
+    sourceArchitecture = "auto";
+    sourceUrl = action.payload;
+    showAddSection = true;
+  }
+
+  async function consumeDeepLinkActions(): Promise<void> {
+    try {
+      const actions = await invoke<DeepLinkAction[]>("take_pending_deep_links");
+      for (const action of actions) applyDeepLinkAction(action);
+    } catch (error) {
+      showSnackbar(`Could not read the opened link: ${messageOf(error)}`, 6000, "error");
+    }
+  }
+
+  onMount(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void consumeDeepLinkActions();
+    void listen("deep-link://action", () => void consumeDeepLinkActions()).then((stopListening) => {
+      if (disposed) stopListening();
+      else unlisten = stopListening;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   });
 
   onMount(() => {

@@ -15,6 +15,7 @@ use tauri::{
     Emitter, Manager,
 };
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_deep_link::DeepLinkExt;
 
 #[derive(serde::Serialize)]
 struct Platform {
@@ -72,8 +73,10 @@ pub fn run() {
     tauri::Builder::default()
         .manage(github::GithubState::default())
         .manage(github::ApiTokenState::default())
+        .manage(deep_link::PendingDeepLinks::default())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             deep_link::handle_urls(app, &argv);
+            show_main_window(app);
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
@@ -111,6 +114,26 @@ pub fn run() {
 
             deep_link::install(app);
 
+            // A link that launched the app is stored by the plugin (macOS open-url event,
+            // or argv on Windows/Linux). Links received while running arrive via on_open_url.
+            let startup_urls: Vec<String> = app
+                .deep_link()
+                .get_current()
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|url| url.to_string())
+                .collect();
+            deep_link::handle_urls(app.handle(), &startup_urls);
+
+            let open_url_handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                let urls: Vec<String> = event.urls().into_iter().map(|url| url.to_string()).collect();
+                deep_link::handle_urls(&open_url_handle, &urls);
+                show_main_window(&open_url_handle);
+            });
+
             let open = MenuItem::with_id(app, "open", "Open Updainium", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;
@@ -145,6 +168,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            deep_link::take_pending_deep_links,
             backup::export_settings_file,
             backup::import_settings_file,
             github::github_status,
@@ -221,7 +245,7 @@ fn open_in_editor(path: String) -> Result<(), String> {
     }
 }
 
-fn show_main_window(app: &tauri::AppHandle) {
+fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     #[cfg(target_os = "macos")]
     let _ = app.set_dock_visibility(true);
     if let Some(window) = app.get_webview_window("main") {

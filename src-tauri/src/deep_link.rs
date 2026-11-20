@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use serde::Serialize;
 use tauri::{Emitter, Manager, Runtime, WindowEvent};
 
@@ -7,6 +9,12 @@ pub struct DeepLinkAction {
     pub kind: DeepLinkKind,
     pub payload: Option<String>,
 }
+
+/// Actions waiting for the frontend. Events emitted before the UI registers its
+/// listener (for example when a link launches the app from a closed state) would
+/// otherwise be lost, so the frontend drains this queue on mount and on each event.
+#[derive(Default)]
+pub struct PendingDeepLinks(Mutex<Vec<DeepLinkAction>>);
 
 #[derive(Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -95,7 +103,21 @@ pub fn validate_payload_size(payload: &str) -> Result<(), String> {
 }
 
 pub fn emit_deep_link<R: Runtime>(app: &tauri::AppHandle<R>, action: DeepLinkAction) {
+    if let Some(pending) = app.try_state::<PendingDeepLinks>() {
+        if let Ok(mut queue) = pending.0.lock() {
+            queue.push(action.clone());
+        }
+    }
     let _ = app.emit("deep-link://action", action);
+}
+
+#[tauri::command]
+pub fn take_pending_deep_links(pending: tauri::State<'_, PendingDeepLinks>) -> Vec<DeepLinkAction> {
+    pending
+        .0
+        .lock()
+        .map(|mut queue| std::mem::take(&mut *queue))
+        .unwrap_or_default()
 }
 
 pub fn handle_urls<R: Runtime>(app: &tauri::AppHandle<R>, urls: &[String]) {
