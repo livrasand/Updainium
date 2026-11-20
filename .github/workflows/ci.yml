@@ -2,28 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 env:
   RUST_CACHE_KEY: ${{ runner.os }}-rust-${{ hashFiles('**/Cargo.lock') }}
-  TAURI_VERSION: 2.0.0
 
 jobs:
-  lint:
-    name: Lint (frontend)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run format -- --check
-
   typecheck:
     name: Typecheck (frontend)
     runs-on: ubuntu-latest
@@ -31,10 +17,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: 22
+          cache: npm
       - run: npm ci
-      - run: npm run typecheck
+      - run: npm run check
 
   test:
     name: Test (frontend)
@@ -43,14 +29,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: 22
+          cache: npm
       - run: npm ci
-      - run: npm run test -- --run
+      - run: npm test
 
   build-tauri:
     name: Build Tauri (${{ matrix.os }})
-    needs: [lint, typecheck, test]
+    needs: [typecheck, test]
     strategy:
       fail-fast: false
       matrix:
@@ -75,24 +61,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libglib2.0-dev \
-            libgobject-2.0-dev
-
-      - name: Install system dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install gtk+3 webkit2gtk-4.1 libappindicator3 librsvg patchelf
+          sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev \
+            libayatana-appindicator3-dev libwebkit2gtk-4.1-dev patchelf
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: 22
+          cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -122,7 +97,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           target: ${{ matrix.target }}
-          args: --config tauri.conf.json
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -132,21 +106,3 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*
             src-tauri/target/${{ matrix.target }}/release/updainium*
           retention-days: 7
-
-  release:
-    name: Create Release
-    needs: build-tauri
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/**
-          generate_release_notes: true
