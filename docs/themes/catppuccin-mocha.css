@@ -1,0 +1,17 @@
+/* Catppuccin Mocha Theme for Updainium */
+:root {
+  /* Fondos principales */
+  --up-bg: #1e1e2e;              /* Base */
+  --up-surface: #313244;         /* Surface0 */
+  --up-surface-raised: #45475a;  /* Surface1 */
+  --up-surface-muted: #181825;   /* Mantle */
+
+  /* Textos */
+  --up-text: #cdd6f4;            /* Text */
+  --up-muted: #bac2de;           /* Subtext1 */
+  --up-subtle: #a6adc8;          /* Subtext0 */
+
+  /* Bordes y acentos */
+  --up-border: #585b70;          /* Surface2 */
+  --up-accent: #cba6f7;          /* Mauve (color característico de Catppuccin) */
+}
