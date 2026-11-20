@@ -51,7 +51,7 @@ type PluginLocation = {
   options?: { baseDir?: BaseDirectory };
 };
 
-const APP_VERSION = "1.5.1";
+const APP_VERSION = "1.5.2";
 const builtInProviders = [githubProvider, gitlabProvider, giteaProvider];
 let providers: Provider[] = [...builtInProviders];
 const loadedPlugins = new Map<string, (() => void)[]>();
