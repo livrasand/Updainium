@@ -65,7 +65,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev \
             libayatana-appindicator3-dev libwebkit2gtk-4.1-dev patchelf \
-            libglib2.0-dev libgobject-2.0-dev \
+            libglib2.0-dev \
             xvfb imagemagick libwebkit2gtk-4.1-0 libayatana-appindicator3-1 xdg-user-dirs 'libasound2'
 
       - name: Build
