@@ -1,5 +1,5 @@
-import type { Provider } from "./types";
-import { createReference, normalizeRelease } from "./shared";
+import type { Provider } from "./types.ts";
+import { createReference, normalizeRelease } from "./shared.ts";
 
 export const gitlabProvider: Provider = {
   id: "gitlab",

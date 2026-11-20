@@ -1064,26 +1064,7 @@ fn installed_linux_version(identifier: &str) -> Result<Option<String>, String> {
     }
 }
 
-#[tauri::command]
-async fn download_release_asset(
-    app: tauri::AppHandle,
-    url: String,
-    file_name: String,
-    expected_sha256: Option<String>,
-    download_id: String,
-) -> Result<DownloadedAsset, String> {
-    let parsed_url = parse_https_url(&url, "The download must come from an HTTPS source.")?;
-    let expected_sha256 = expected_sha256
-        .map(|digest| {
-            let normalized = digest.strip_prefix("sha256:").unwrap_or(&digest);
-            if normalized.len() == 64 && normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                Ok(normalized.to_ascii_lowercase())
-            } else {
-                Err("The published SHA-256 checksum is invalid.".to_owned())
-            }
-        })
-        .transpose()?;
-
+fn sanitize_download_file_name(file_name: &str) -> Result<String, String> {
     let safe_name: String = file_name
         .chars()
         .map(|character| {
@@ -1097,6 +1078,34 @@ async fn download_release_asset(
     if safe_name.is_empty() || safe_name.starts_with('.') {
         return Err("The installer file name is not valid.".into());
     }
+    Ok(safe_name)
+}
+
+fn normalize_expected_sha256(expected_sha256: Option<String>) -> Result<Option<String>, String> {
+    expected_sha256
+        .map(|digest| {
+            let normalized = digest.strip_prefix("sha256:").unwrap_or(&digest);
+            if normalized.len() == 64 && normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                Ok(normalized.to_ascii_lowercase())
+            } else {
+                Err("The published SHA-256 checksum is invalid.".to_owned())
+            }
+        })
+        .transpose()
+}
+
+#[tauri::command]
+async fn download_release_asset(
+    app: tauri::AppHandle,
+    url: String,
+    file_name: String,
+    expected_sha256: Option<String>,
+    download_id: String,
+) -> Result<DownloadedAsset, String> {
+    let parsed_url = parse_https_url(&url, "The download must come from an HTTPS source.")?;
+    let expected_sha256 = normalize_expected_sha256(expected_sha256)?;
+
+    let safe_name = sanitize_download_file_name(&file_name)?;
 
     let client = https_client()?;
     let mut response = client
@@ -1215,6 +1224,25 @@ mod tests {
             unique_identifier(vec!["first".into(), "second".into()]),
             None
         );
+    }
+
+    #[test]
+    fn sanitizes_download_file_names() {
+        assert_eq!(sanitize_download_file_name("app 1.2.3.msi").unwrap(), "app_1.2.3.msi");
+        assert_eq!(sanitize_download_file_name("a/b/c.AppImage").unwrap(), "a_b_c.AppImage");
+        assert!(sanitize_download_file_name("").is_err());
+        assert!(sanitize_download_file_name(".hidden").is_err());
+    }
+
+    #[test]
+    fn normalizes_expected_sha256() {
+        assert_eq!(
+            normalize_expected_sha256(Some("ABC".repeat(21) + "A")).unwrap().unwrap().len(),
+            64
+        );
+        assert!(normalize_expected_sha256(Some(format!("sha256:{}", "ABC".repeat(21) + "A"))).is_ok());
+        assert!(normalize_expected_sha256(Some("too-short".to_owned())).is_err());
+        assert_eq!(normalize_expected_sha256(None).unwrap(), None);
     }
 
     #[test]

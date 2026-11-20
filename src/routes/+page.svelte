@@ -238,13 +238,7 @@
     };
   });
 
-  $effect(() => {
-    if (!ready) return;
-    const snapshot = [...sources];
-    updateSettings((current) => ({ ...current, sources: snapshot })).catch((error) => {
-      showSnackbar(`Could not save the local catalog: ${messageOf(error)}`, 6000, "error");
-    });
-  });
+  
 
   onMount(() => {
     const disposers = [
@@ -336,6 +330,14 @@
 
   function messageOf(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  async function persistSources(): Promise<void> {
+    try {
+      await updateSettings((current) => ({ ...current, sources: [...sources] }));
+    } catch (error) {
+      showSnackbar(`Could not save the local catalog: ${messageOf(error)}`, 6000, "error");
+    }
   }
 
   function setSourceError(sourceId: string, error: string): void {
@@ -681,6 +683,7 @@
       sourceExtension = "";
       sourceArchitecture = "auto";
       showAddSection = false;
+      await persistSources();
       await Promise.all([checkSource(sourceId), checkInstalled(source)]);
     } catch (error) {
       showSnackbar(messageOf(error), 6000, "error");
@@ -745,6 +748,9 @@
         ? { ...item, lastKnownInstalledVersion: normalized, installedVersionSource: source }
         : item,
     );
+    if (source === "manual") {
+      persistSources();
+    }
   }
 
   function installedVersionForComparison(source: TrackedSource): string | null {
@@ -776,6 +782,7 @@
         : item,
     );
     installedVersionEditorOpenFor = null;
+    persistSources();
   }
 
   function installedVersionIsCurrent(source: TrackedSource): boolean {
@@ -794,6 +801,7 @@
   function markUpToDate(source: TrackedSource): void {
     if (!source.version || source.version === "Unversioned release") return;
     rememberInstalledVersion(source.id, source.version, "manual");
+    persistSources();
   }
 
   function isInstalled(source: TrackedSource): boolean {
@@ -863,6 +871,7 @@
           ? { ...item, lastKnownInstalledVersion: undefined, installedVersionSource: undefined }
           : item,
       );
+      await persistSources();
       installedVersions[source.id] = undefined;
       await checkInstalled(source);
       showSnackbar(`${appName} was uninstalled.`);
@@ -943,6 +952,7 @@
             }
           : item,
       );
+      await persistSources();
       await openPath(downloaded.path);
       await checkInstalled(source);
     } catch (error) {
@@ -971,6 +981,7 @@
     try {
       await openPath(source.downloadPath);
       sources = sources.map((item) => (item.id === source.id ? { ...item, error: "" } : item));
+      await persistSources();
     } catch (error) {
       setSourceError(source.id, `Could not open the installer: ${messageOf(error)}`);
     }
@@ -980,6 +991,7 @@
     if (!confirm(`Remove ${source.repo} from your catalog?`)) return false;
     deleteResumeSession(source.id);
     sources = sources.filter((item) => item.id !== source.id);
+    persistSources();
     return true;
   }
 
