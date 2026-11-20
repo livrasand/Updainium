@@ -12,6 +12,8 @@ Install and update desktop apps directly from their official releases.
 
 Inspired by [Obtainium](https://github.com/ImranR98/Obtainium), Updainium brings the same source-based update model to the desktop. It talks to the developer's release page directly: no middleman repository, no account, no telemetry, and no silent updates.
 
+**Updainium is not a package manager.** It does not replace apt, dnf, pacman, winget, or Homebrew. It is for apps that **aren't in your distro's repositories** — AppImages, standalone EXEs, DMGs, and other release assets published directly by developers on GitHub, GitLab, Gitea, Forgejo, or Codeberg.
+
 **Who it is for**
 
 - Developers and power users who install desktop apps from GitHub, GitLab, Gitea, or Forgejo releases.
@@ -19,7 +21,15 @@ Inspired by [Obtainium](https://github.com/ImranR98/Obtainium), Updainium brings
 - Anyone who wants to read release notes and approve installers instead of accepting invisible background updates.
 - Maintainers who publish installers as release assets and want a desktop-native way to follow upstream projects.
 
-**Not for:** OS packages, drivers, Android APKs, or fully unattended updates. Use your package manager, [Obtainium](https://github.com/ImranR98/Obtainium), or the vendor's own updater for those.
+**Not for:** OS packages (apt, dnf, pacman, winget, Homebrew), drivers, Android APKs, or fully unattended updates. Use your package manager, [Obtainium](https://github.com/ImranR98/Obtainium), or the vendor's own updater for those.
+
+### Use cases
+
+- **GitHub Release apps** — Gram, Obsidian, VS Code Insiders, Bitwarden, Signal, and any app published as `.exe`, `.msi`, `.dmg`, `.AppImage`, `.deb`, `.rpm`, or `.tar.gz` on GitHub/GitLab/Codeberg releases.
+- **Self-hosted forges** — Apps from your company's Gitea/Forgejo/GitLab instance.
+- **Cross-platform workflow** — Same update process on Windows, macOS, and Linux without learning three different tools.
+- **Manual approval** — You read release notes, verify checksums, and decide when to install.
+- **Extensible via plugins** — Unlike tools such as topgrade, Updainium is a platform. Write a plugin to support any Git hosting platform (Bitbucket, Sourcehut, custom forges) or add custom update logic.
 
 ## Start in three steps
 
@@ -71,7 +81,7 @@ Inspired by [Obtainium](https://github.com/ImranR98/Obtainium), Updainium brings
 - **Injectable styles** with `styles.css` for quick tweaks without a full theme.
 - **Startup scripts** with `init.js`, executed when Updainium launches in the WebView context.
 - **Command palette** with `Cmd/Ctrl+Shift+P`, plus customizable keybindings in `keymap.json`.
-- **Local plugins** that add providers, commands, and keybindings. Plugins can be a directory with an `updainium.json` manifest or a single `.js` file. See [docs/providers.md](docs/providers.md).
+- **Local plugins** — Updainium's competitive advantage. Plugins add providers, commands, and keybindings. A plugin can be a directory with an `updainium.json` manifest or a single `.js` file. This makes Updainium a platform, not just an updater: anyone can write a plugin for their favorite forge (GitLab, Codeberg, Gitea, Bitbucket, Sourcehut, or any Git hosting platform). See [docs/providers.md](docs/providers.md).
 - **Deep-link entry point.** Updainium registers the `updainium://` scheme and validates `add`, `app`, `apps`, and `refresh` actions in the native layer, ready for launcher and automation integrations.
 
 > [!WARNING]
@@ -102,9 +112,11 @@ We promise:
 - NO AUTOMATIC INSTALLATION OR UPDATES
 
 ## Limitations
+
+- Updainium is **not a package manager** and does not compete with apt, dnf, pacman, winget, or Homebrew. It only tracks release assets from Git hosting platforms (GitHub, GitLab, Gitea, Forgejo, Codeberg).
 - For some sources that lack standardized APIs, Updainium gathers data using web scraping. This means tracking can occasionally break if the source website changes its design. In these specific edge cases, more reliable methods may temporarily be unavailable. See [LEGAL.md](LEGAL.md): users are responsible for evaluating the software they choose to download and run.
 - macOS builds are not yet notarized, so macOS may show a security warning. Approve the app in **System Settings → Privacy & Security → Open Anyway**.
-- On some Linux setups, WebKitGTK’s DMABUF renderer is disabled by default to avoid rendering artifacts.
+- On some Linux setups, WebKitGTK's DMABUF renderer is disabled by default to avoid rendering artifacts.
 
 ## Screenshots
 
@@ -272,7 +284,7 @@ Release checks and downloads require network access. Your catalog, settings, and
 [![Share](https://img.shields.io/badge/share-1877F2?logo=facebook&logoColor=white)](https://www.facebook.com/sharer/sharer.php?u=https://github.com/livrasand/Updainium)
 [![Share](https://custom-icon-badges.demolab.com/badge/share-0A66C2?logo=linkedin-white&logoColor=white)](https://www.linkedin.com/sharing/share-offsite/?url=https://github.com/livrasand/Updainium)
 [![Share](https://img.shields.io/badge/share-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/submit?title=Check%20out%20this%20project%20on%20GitHub:%20https://github.com/livrasand/Updainium)
-[![Share](https://img.shields.io/badge/share-0088CC?logo=telegram&logoColor=white)](https://t.me/share/url?url=https://github.com/livrasand/Updainium&text=Check%20out%20this%20project%20on%20GitHub)
+[![Share](https://img.shields.io/badge/share-0088CC?logo=telegram&logoColor=white)](https://t.me/share/url?url=https://github.com/livrasand/Updainium&text=Check%20out%20Updainium:%20https://github.com/livrasand/Updainium)
 [![Share](https://img.shields.io/badge/share-0285FF?logo=bluesky&logoColor=white)](https://bsky.app/intent/compose?text=Check%20out%20Updainium:%20https://github.com/livrasand/Updainium)
 [![Share](https://img.shields.io/badge/share-6364FF?logo=mastodon&logoColor=white)](https://mastodonshare.com/?url=https://github.com/livrasand/Updainium)
 [![Share](https://img.shields.io/badge/share-FF6600?logo=ycombinator&logoColor=white)](https://news.ycombinator.com/submitlink?u=https://github.com/livrasand/Updainium)
