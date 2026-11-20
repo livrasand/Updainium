@@ -65,6 +65,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev \
             libayatana-appindicator3-dev libwebkit2gtk-4.1-dev patchelf \
+            libglib2.0-dev libgobject-2.0-dev \
             xvfb imagemagick libwebkit2gtk-4.1-0 libayatana-appindicator3-1 xdg-user-dirs 'libasound2'
 
       - name: Build
@@ -410,7 +411,7 @@ jobs:
 
           cat comment.md
 
-          gh issue comment "$ISSUE" -R "$REPO" --edit-last --create-if-new --body-file comment.md
+          gh issue comment "$ISSUE" -R "$REPO" --edit-last --create-if-none --body-file comment.md
 
           if [[ -f out/verify-evidence-macOS/.verify ]] && grep -q '^macos=ok$' out/verify-evidence-macOS/.verify && \
              [[ -f out/verify-evidence-Linux/.verify ]] && grep -q '^linux=ok$'  out/verify-evidence-Linux/.verify  && \
