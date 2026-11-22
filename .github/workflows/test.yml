@@ -18,6 +18,9 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
 concurrency:
   group: verify-${{ inputs.issue_number }}
   cancel-in-progress: true

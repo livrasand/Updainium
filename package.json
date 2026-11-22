@@ -3,6 +3,14 @@
   "version": "1.5.2",
   "description": "",
   "type": "module",
+  "imports": {
+    "#lib": "./src/lib/index.js",
+    "#lib/*": [
+      "./src/lib/*",
+      "./src/lib/*.ts",
+      "./src/lib/*.svelte"
+    ]
+  },
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",

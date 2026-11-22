@@ -4,11 +4,11 @@
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
   import { invoke } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { createBackup, parseBackup, parseGistId, restoreSources, type Backup } from "$lib/backup";
-  import { registerCommand } from "$lib/commands";
-  import { cacheGists, clearCachedGists, readCachedGists, chooseMainBackup, type Gist, type GistRevision } from "$lib/gists";
-  import { getSettings, loadSettings, updateSettings, type Settings } from "$lib/settings.svelte";
-  import { showSnackbar } from "$lib/snackbar.svelte";
+  import { createBackup, parseBackup, parseGistId, restoreSources, type Backup } from "#lib/backup";
+  import { registerCommand } from "#lib/commands";
+  import { cacheGists, clearCachedGists, readCachedGists, chooseMainBackup, type Gist, type GistRevision } from "#lib/gists";
+  import { getSettings, loadSettings, updateSettings, type Settings } from "#lib/settings.svelte";
+  import { showSnackbar } from "#lib/snackbar.svelte";
 
   let backgroundEnabled = $state(false);
   let startOnLogin = $state(false);
