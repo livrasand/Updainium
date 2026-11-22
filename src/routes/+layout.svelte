@@ -9,10 +9,10 @@
   import { copyFile, exists, mkdir, remove, writeTextFile } from "@tauri-apps/plugin-fs";
   import { appConfigDir, BaseDirectory } from "@tauri-apps/api/path";
   import { openPath } from "@tauri-apps/plugin-opener";
-  import CommandPalette from "$lib/CommandPalette.svelte";
-  import { registerCommand, executeCommand } from "$lib/commands";
-  import { listInstalledPlugins, loadUserPlugins } from "$lib/registry";
-  import { hideSnackbar, showSnackbar, snackbar } from "$lib/snackbar.svelte";
+  import CommandPalette from "#lib/CommandPalette.svelte";
+  import { registerCommand, executeCommand } from "#lib/commands";
+  import { listInstalledPlugins, loadUserPlugins } from "#lib/registry";
+  import { hideSnackbar, showSnackbar, snackbar } from "#lib/snackbar.svelte";
   import {
     getActiveThemeName,
     initThemeSystem,
@@ -20,15 +20,15 @@
     listInstalledThemes,
     setActiveTheme,
     uninstallTheme,
-  } from "$lib/themes";
+  } from "#lib/themes";
   import {
     eventToCombo,
     findCommandForKeymap,
     getActiveKeymap,
     initKeymap,
     isEditableTarget,
-  } from "$lib/keymap";
-  import { getSettings, loadSettings } from "$lib/settings.svelte";
+  } from "#lib/keymap";
+  import { getSettings, loadSettings } from "#lib/settings.svelte";
 
   let { children }: { children: Snippet } = $props();
   let copied = $state(false);

@@ -9,12 +9,12 @@
   import { marked } from "marked";
   import DOMPurify from "dompurify";
   import "github-markdown-css";
-  import { assetForExtension, assetForPlatform, formats, type Platform } from "$lib/assets";
-  import { type TrackedSource } from "$lib/catalog";
-  import { registerCommand } from "$lib/commands";
-  import { loadUserPlugins, resolveProvider } from "$lib/registry";
-  import { getSettings, loadSettings, updateSettings } from "$lib/settings.svelte";
-  import { showSnackbar } from "$lib/snackbar.svelte";
+  import { assetForExtension, assetForPlatform, formats, type Platform } from "#lib/assets";
+  import { type TrackedSource } from "#lib/catalog";
+  import { registerCommand } from "#lib/commands";
+  import { loadUserPlugins, resolveProvider } from "#lib/registry";
+  import { getSettings, loadSettings, updateSettings } from "#lib/settings.svelte";
+  import { showSnackbar } from "#lib/snackbar.svelte";
   import Button from "@smui/button";
   import Card from "@smui/card";
 

@@ -33,6 +33,20 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["time"] }
 url = "2"
 
+# GHSA-wrw7-89jp-8q8g / RUSTSEC-2024-0429: unsound VariantStrIter in glib < 0.20.0.
+# glib >= 0.20 is unreachable because Tauri v2's Linux GTK3 stack (gtk-rs 0.18, archived)
+# requires glib ^0.18. gtk-rs will not release 0.18.6, so we patch in the upstream fix.
+# Remove this patch when Tauri moves to GTK4/glib >= 0.20.
+[patch.crates-io]
+# All gtk-rs-core crates must come from the same source/rev: mixing the patched
+# `glib` (git, 0.18.5) with crates.io `gio`/`*-sys` (0.18.0-0.18.4) produces
+# incompatible FFI types (E0277/E0308/E0605 in `gio`).
+glib = { git = "https://github.com/jcfs/gtk-rs-core", rev = "ea720152f28e293ef4362ee844ee5cc499f32d2a" }
+glib-sys = { git = "https://github.com/jcfs/gtk-rs-core", rev = "ea720152f28e293ef4362ee844ee5cc499f32d2a" }
+gobject-sys = { git = "https://github.com/jcfs/gtk-rs-core", rev = "ea720152f28e293ef4362ee844ee5cc499f32d2a" }
+gio = { git = "https://github.com/jcfs/gtk-rs-core", rev = "ea720152f28e293ef4362ee844ee5cc499f32d2a" }
+gio-sys = { git = "https://github.com/jcfs/gtk-rs-core", rev = "ea720152f28e293ef4362ee844ee5cc499f32d2a" }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", features = ["apple-native"] }
 
