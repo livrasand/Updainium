@@ -10,6 +10,7 @@ body:
         ## Prerequisites
 
         - Please ensure your request is not part of an [existing issue](https://github.com/livrasand/Updainium/issues?q=is%3Aissue%20label%3Abug).
+        - If you're unsure about the feasibility of an implementation or contributing code, please consider discussing it in **[Discussions](https://github.com/livrasand/Updainium/discussions/new?category=feature-ideas)** first.
 
          >[!NOTE]
          > For new Sources, please ensure:
