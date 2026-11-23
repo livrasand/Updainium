@@ -13,7 +13,7 @@
   import { type TrackedSource } from "#lib/catalog";
   import { registerCommand } from "#lib/commands";
   import { loadUserPlugins, resolveProvider } from "#lib/registry";
-  import { getSettings, loadSettings, updateSettings } from "#lib/settings.svelte";
+  import { getSettings, getSetting, loadSettings, setSetting, updateSettings } from "#lib/settings.svelte";
   import { showSnackbar } from "#lib/snackbar.svelte";
   import Button from "@smui/button";
   import Card from "@smui/card";
@@ -81,8 +81,96 @@
   let resumeSessions = $state<Record<string, ResumeSession | undefined>>({});
   let resumeLaunching = $state(false);
 
+  // Filter, sort, and multi-select state
+  let showFilterSheet = $state(false);
+  let filterName = $state("");
+  let filterAuthor = $state("");
+  let filterAppId = $state("");
+  let filterUpdatedOnly = $state(false);
+  let filterNotInstalledOnly = $state(false);
+  let filterSource = $state("");
+  let filterCategory = $state("");
+  let sortBy: "name" | "author" | "lastUpdated" | "updateStatus" | "pinned" = $state("name");
+  let sortDirection: "asc" | "desc" = $state("asc");
+  let selectionMode = $state(false);
+  let selectedAppIds = $state<Set<string>>(new Set());
+  let showActionsSheet = $state(false);
+
+  // Categories/tags for apps (stored in source metadata)
+  let appCategories = $state<Record<string, string[]>>({});
+  let appPinned = $state<Set<string>>(new Set());
+
   const visibleSources = $derived(
-    sources.filter((source) => source.repo.toLowerCase().includes(filter.trim().toLowerCase())),
+    sources
+      .filter((source) => {
+        // Text search filter
+        if (filter.trim() && !source.repo.toLowerCase().includes(filter.trim().toLowerCase())) {
+          return false;
+        }
+        // Advanced filters
+        if (filterName && !source.repo.toLowerCase().includes(filterName.toLowerCase())) {
+          return false;
+        }
+        const author = source.repo.split("/").slice(0, -1).join("/");
+        if (filterAuthor && !author.toLowerCase().includes(filterAuthor.toLowerCase())) {
+          return false;
+        }
+        if (filterAppId && source.appIdentifier && !source.appIdentifier.toLowerCase().includes(filterAppId.toLowerCase())) {
+          return false;
+        }
+        if (filterUpdatedOnly && !hasUpdate(source)) {
+          return false;
+        }
+        if (filterNotInstalledOnly && isInstalled(source)) {
+          return false;
+        }
+        if (filterSource && !source.url.toLowerCase().includes(filterSource.toLowerCase())) {
+          return false;
+        }
+        if (filterCategory && (!appCategories[source.id] || !appCategories[source.id].includes(filterCategory))) {
+          return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        // Pinned apps first
+        const aPinned = appPinned.has(a.id);
+        const bPinned = appPinned.has(b.id);
+        if (aPinned && !bPinned) return -1;
+        if (!aPinned && bPinned) return 1;
+        
+        // Sort by update status (updates first)
+        const aHasUpdate = hasUpdate(a);
+        const bHasUpdate = hasUpdate(b);
+        if (sortBy === "updateStatus") {
+          if (aHasUpdate && !bHasUpdate) return sortDirection === "asc" ? -1 : 1;
+          if (!aHasUpdate && bHasUpdate) return sortDirection === "asc" ? 1 : -1;
+        }
+        
+        // Sort by last updated
+        if (sortBy === "lastUpdated") {
+          const aDate = a.releaseDate ? new Date(a.releaseDate).getTime() : 0;
+          const bDate = b.releaseDate ? new Date(b.releaseDate).getTime() : 0;
+          if (aDate !== bDate) return sortDirection === "asc" ? aDate - bDate : bDate - aDate;
+        }
+        
+        // Sort by name
+        if (sortBy === "name") {
+          const aName = a.repo.split("/").at(-1) ?? a.repo;
+          const bName = b.repo.split("/").at(-1) ?? b.repo;
+          return sortDirection === "asc" ? aName.localeCompare(bName) : bName.localeCompare(aName);
+        }
+        
+        // Sort by author
+        if (sortBy === "author") {
+          const aAuthor = a.repo.split("/").slice(0, -1).join("/");
+          const bAuthor = b.repo.split("/").slice(0, -1).join("/");
+          if (aAuthor !== bAuthor) return sortDirection === "asc" ? aAuthor.localeCompare(bAuthor) : bAuthor.localeCompare(aAuthor);
+        }
+        
+        // Sort by pinned (already handled above, but fallback)
+        return a.repo.localeCompare(b.repo);
+      }),
   );
   const selectedSource = $derived(sources.find((source) => source.id === selectedSourceId));
 
@@ -188,6 +276,8 @@
     }
   });
 
+  // (persistence handled in setSortBy to avoid reactive loops)
+
   onMount(async () => {
     try {
       await loadUserPlugins();
@@ -197,6 +287,17 @@
     try {
       await loadSettings();
       sources = [...getSettings().sources];
+      const savedSort = getSetting("plugins.sort") as { sortBy?: string; sortDirection?: string } | undefined;
+      if (savedSort?.sortBy && ["name", "author", "lastUpdated", "updateStatus", "pinned"].includes(savedSort.sortBy)) {
+        sortBy = savedSort.sortBy as typeof sortBy;
+      }
+      if (savedSort?.sortDirection === "asc" || savedSort?.sortDirection === "desc") {
+        sortDirection = savedSort.sortDirection as "asc" | "desc";
+      }
+      const savedPinned = getSetting("plugins.pinned");
+      if (Array.isArray(savedPinned)) {
+        appPinned = new Set(savedPinned.filter((id): id is string => typeof id === "string"));
+      }
       resumeSessions = parseResumeSessions(localStorage.getItem(resumeStorageKey));
     } catch (error) {
       showSnackbar(`Could not load the local catalog: ${messageOf(error)}`, 6000, "error");
@@ -1048,6 +1149,181 @@
     return "Pending";
   }
 
+  // Multi-select and batch actions
+  function toggleSelection(sourceId: string): void {
+    const newSelection = new Set(selectedAppIds);
+    if (newSelection.has(sourceId)) {
+      newSelection.delete(sourceId);
+    } else {
+      newSelection.add(sourceId);
+    }
+    selectedAppIds = newSelection;
+    selectionMode = newSelection.size > 0;
+  }
+
+  function selectAll(): void {
+    selectedAppIds = new Set(visibleSources.map((s) => s.id));
+    selectionMode = true;
+  }
+
+  function clearSelection(): void {
+    selectedAppIds = new Set();
+    selectionMode = false;
+  }
+
+  function isSelected(sourceId: string): boolean {
+    return selectedAppIds.has(sourceId);
+  }
+
+  function savePinned(): void {
+    if (!ready) return;
+    void setSetting("plugins.pinned", [...appPinned]).catch((error) => {
+      showSnackbar(`Could not save pinned apps: ${messageOf(error)}`, 6000, "error");
+    });
+  }
+
+  function togglePin(sourceId: string): void {
+    const newPinned = new Set(appPinned);
+    if (newPinned.has(sourceId)) {
+      newPinned.delete(sourceId);
+    } else {
+      newPinned.add(sourceId);
+    }
+    appPinned = newPinned;
+    savePinned();
+  }
+
+  function isPinned(sourceId: string): boolean {
+    return appPinned.has(sourceId);
+  }
+
+  function hasCategory(sourceId: string, category: string): boolean {
+    return appCategories[sourceId]?.includes(category) ?? false;
+  }
+
+  // Batch actions
+  async function batchDelete(): Promise<void> {
+    if (selectedAppIds.size === 0) return;
+    if (!confirm(`Delete ${selectedAppIds.size} selected app(s)?`)) return;
+    for (const id of selectedAppIds) {
+      const source = sources.find((s) => s.id === id);
+      if (source) removeSource(source);
+    }
+    clearSelection();
+    showActionsSheet = false;
+  }
+
+  async function batchCheckRelease(): Promise<void> {
+    if (selectedAppIds.size === 0) return;
+    for (const id of selectedAppIds) {
+      await checkSource(id);
+    }
+    clearSelection();
+    showActionsSheet = false;
+  }
+
+  async function batchInstallOrUpdate(): Promise<void> {
+    if (selectedAppIds.size === 0) return;
+    for (const id of selectedAppIds) {
+      const source = sources.find((s) => s.id === id);
+      if (source && canInstallOrUpdate(source)) {
+        await runPrimaryAction(source);
+      }
+    }
+    clearSelection();
+    showActionsSheet = false;
+  }
+
+  async function batchPin(): Promise<void> {
+    if (selectedAppIds.size === 0) return;
+    for (const id of selectedAppIds) {
+      if (!appPinned.has(id)) togglePin(id);
+    }
+    savePinned();
+    clearSelection();
+    showActionsSheet = false;
+  }
+
+  async function batchUnpin(): Promise<void> {
+    if (selectedAppIds.size === 0) return;
+    for (const id of selectedAppIds) {
+      if (appPinned.has(id)) togglePin(id);
+    }
+    savePinned();
+    clearSelection();
+    showActionsSheet = false;
+  }
+
+  // Filter sheet actions
+  function openFilterSheet(): void {
+    showFilterSheet = true;
+  }
+
+  function closeFilterSheet(): void {
+    showFilterSheet = false;
+  }
+
+  function applyFilters(): void {
+    closeFilterSheet();
+  }
+
+  function clearFilters(): void {
+    filterName = "";
+    filterAuthor = "";
+    filterAppId = "";
+    filterUpdatedOnly = false;
+    filterNotInstalledOnly = false;
+    filterSource = "";
+    filterCategory = "";
+    closeFilterSheet();
+  }
+
+  const hasActiveFilters = $derived(
+    Boolean(
+      filter.trim() ||
+        filterName ||
+        filterAuthor ||
+        filterAppId ||
+        filterUpdatedOnly ||
+        filterNotInstalledOnly ||
+        filterSource ||
+        filterCategory,
+    ),
+  );
+
+  // Sort actions
+  function setSortBy(newSortBy: typeof sortBy): void {
+    if (sortBy === newSortBy) {
+      sortDirection = sortDirection === "asc" ? "desc" : "asc";
+    } else {
+      sortBy = newSortBy;
+      sortDirection = "asc";
+    }
+    if (ready) {
+      void setSetting("plugins.sort", { sortBy, sortDirection }).catch((error) => {
+        showSnackbar(`Could not save sort preferences: ${messageOf(error)}`, 6000, "error");
+      });
+    }
+  }
+
+  const sortModes: ("name" | "author" | "lastUpdated" | "updateStatus" | "pinned")[] = ["name", "author", "lastUpdated", "updateStatus", "pinned"];
+  function cycleSort(): void {
+    const currentIndex = sortModes.indexOf(sortBy);
+    const nextSortBy = sortModes[(currentIndex + 1) % sortModes.length];
+    setSortBy(nextSortBy);
+    showSnackbar(`Ordenado por: ${nextSortBy} (${sortDirection === "asc" ? "ascendente" : "descendente"})`);
+  }
+
+  // Get unique categories for filter dropdown
+  const allCategories = $derived(
+    [...new Set(Object.values(appCategories).flat())].sort(),
+  );
+
+  // Get unique sources for filter dropdown
+  const allSources = $derived(
+    [...new Set(sources.map((s) => s.url))].sort(),
+  );
+
 </script>
 
 <svelte:head>
@@ -1354,9 +1630,21 @@
           <a class="settings-button" href="/settings" aria-label="Settings" title="Settings">
             <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="m370-80-16-128q-13-5-24.5-12T307-235l-119 50L78-375l103-78q-1-7-1-13.5v-27q0-6.5 1-13.5L78-585l110-190 119 50q11-8 23-15t24-12l16-128h220l16 128q13 5 24.5 12t22.5 15l119-50 110 190-103 78q1 7 1 13.5v27q0 6.5-2 13.5l103 78-110 190-118-50q-11 8-23 15t-24 12L590-80H370Zm70-80h79l14-106q31-8 57.5-23.5T639-327l99 41 39-68-86-65q5-14 7-29.5t2-31.5q0-16-2-31.5t-7-29.5l86-65-39-68-99 42q-22-23-48.5-38.5T533-694l-13-106h-79l-14 106q-31 8-57.5 23.5T321-633l-99-41-39 68 86 64q-5 15-7 30t-2 32q0 16 2 31t7 30l-86 65 39 68 99-42q22 23 48.5 38.5T427-266l13 106Zm42-180q58 0 99-41t41-99q0-58-41-99t-99-41q-59 0-99.5 41T342-480q0 58 40.5 99t99.5 41Zm-2-140Z"/></svg>
           </a>
-          <Button class="primary-button add-button" variant="unelevated" type="button" onclick={() => { editingSourceId = null; sourceAppIdentifier = ""; showAddSection = true; }}>
-            <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M440-440H200v-80h240v-240h80v240h240v80H520v240h-80v-240Z"/></svg>
-            Add
+          <Button class="primary-button add-button" variant="unelevated" type="button" onclick={() => {
+            if (selectionMode) {
+              showActionsSheet = true;
+            } else {
+              editingSourceId = null;
+              sourceAppIdentifier = "";
+              showAddSection = true;
+            }
+          }}>
+            {#if selectionMode}
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="24px" width="24px" fill="currentColor" aria-hidden="true"><path d="M12,20q-0.82,0-1.41-0.59T10,18t0.59-1.41T12,16t1.41,0.59Q14,17.18 14,18t-0.59,1.41T12,20Zm0-6q-0.82,0-1.41-0.59T10,12t0.59-1.41T12,10t1.41,0.59Q14,11.18 14,12t-0.59,1.41T12,14Zm0-6q-0.82,0-1.41-0.59T10,6t0.59-1.41T12,4t1.41,0.59Q14,5.18 14,6T13.41,7.41T12,8Z"/></svg>
+            {:else}
+              <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M440-440H200v-80h240v-240h80v240h240v80H520v240h-80v-240Z"/></svg>
+            {/if}
+            {selectionMode ? "Actions" : "Add"}
           </Button>
         </div>
       </div>
@@ -1383,17 +1671,36 @@
       </div>
 
       <div class="list-heading">
-        <div><h2>Your library</h2><span class="list-count">{sources.length} {sources.length === 1 ? "app" : "apps"}</span></div>
-        <label class="search-box">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
-          <input bind:value={filter} placeholder="Search" aria-label="Search apps" />
-        </label>
-        {#if checking.length > 0}
-          <span class="linear-progress" role="progressbar" aria-label="Checking for updates">
-            <span class="linear-progress-bar primary"><span></span></span>
-            <span class="linear-progress-bar secondary"><span></span></span>
-          </span>
-        {/if}
+        <div class="list-heading-title"><h2>Your library</h2><span class="list-count">{selectionMode ? `${selectedAppIds.size} selected` : `${visibleSources.length} ${visibleSources.length === 1 ? "app" : "apps"}`}</span></div>
+        <div class="search-and-controls">
+          <div class="search-box">
+            <label class="search-input">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
+              <input bind:value={filter} placeholder="Search" aria-label="Search apps" />
+            </label>
+            <div class="control-buttons">
+              {#if selectedAppIds.size > 0}
+                <Button class="icon-button" variant="text" type="button" aria-label="Clear selection" onclick={clearSelection}>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M19.78,22.6L14.18,17H7V9.82L1.4,4.22L2.8,2.8L21.2,21.2l-1.43,1.4ZM9,15h3.18L9,11.83V15Zm8-0.83l-2-2V9H11.83l-2-2H17v7.17ZM5,19v2q-0.83,0-1.41-0.59T3,19H5ZM3,17V15H5v2H3Zm0-4V11H5v2H3ZM3,9V7H5V9H3ZM7,21V19H9v2H7ZM7,5V3H9V5H7Zm4,16V19h2v2H11ZM11,5V3h2V5H11Zm4,16V19h2v2H15ZM15,5V3h2V5H15Zm4,12V15h2v2H19Zm0-4V11h2v2H19Zm0-4V7h2V9H19Zm0-4V3q0.83,0 1.41,0.59T21,5H19Z"/></svg>
+                </Button>
+              {:else}
+                <Button class="icon-button" variant="text" type="button" aria-label="Select all" onclick={selectAll}>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M7,17V7H17V17H7Zm2-2h6V9H9v6ZM5,19v2q-0.83,0-1.41-0.59T3,19H5ZM3,17V15H5v2H3Zm0-4V11H5v2H3ZM3,9V7H5V9H3ZM5,5H3Q3,4.17 3.59,3.59T5,3V5ZM7,21V19H9v2H7ZM7,5V3H9V5H7Zm4,16V19h2v2H11ZM11,5V3h2V5H11Zm4,16V19h2v2H15ZM15,5V3h2V5H15Zm4,16V19h2q0,0.82-0.59,1.41T19,21Zm0-4V15h2v2H19Zm0-4V11h2v2H19Zm0-4V7h2V9H19Zm0-4V3q0.83,0 1.41,0.59T21,5H19Z"/></svg>
+                </Button>
+              {/if}
+              <span style="font-size: 12px; color: var(--muted, #6b6a78); min-width: 18px; text-align: center; margin-top: 10px; margin-left: -8px;">{sources.length}</span>
+              <Button class="icon-button" variant="text" type="button" aria-label={`Sort by ${sortBy}`} title={`Sort by ${sortBy} (${sortDirection})`} onclick={cycleSort}>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M10,18V16h4v2H10ZM6,13V11H18v2H6ZM3,8V6H21V8H3Z"/></svg>
+              </Button>
+            </div>
+          </div>
+          {#if checking.length > 0}
+            <span class="linear-progress" role="progressbar" aria-label="Checking for updates">
+              <span class="linear-progress-bar primary"><span></span></span>
+              <span class="linear-progress-bar secondary"><span></span></span>
+            </span>
+          {/if}
+        </div>
       </div>
 
       {#if !sources.length}
@@ -1406,10 +1713,11 @@
         <div class="app-list">
           {#each visibleSources as source (source.id)}
             {@const sourceError = source.error}
-            <Card class="app-card" variant="outlined">
+            {@const isSelectedSource = selectionMode && isSelected(source.id)}
+            <Card variant="outlined" class={`app-card${isSelectedSource ? " app-card--selected" : ""}${isPinned(source.id) ? " app-card--pinned" : ""}`}>
               <article class="app-card-content">
                 <div class="avatar-status">
-                  <button class="avatar-open-button" type="button" onclick={() => (selectedSourceId = source.id)} aria-label={`Open ${source.repo.split("/").at(-1)} details`}>
+                  <button class="avatar-open-button" type="button" onclick={() => selectionMode ? toggleSelection(source.id) : (selectedSourceId = source.id)} aria-label={selectionMode ? `Toggle selection for ${source.repo.split("/").at(-1)}` : `Open ${source.repo.split("/").at(-1)} details`}>
                     <span class="app-avatar" class:has-icon={Boolean(source.iconUrl)}>
                       {source.repo.split("/").at(-1)?.slice(0, 1).toUpperCase() ?? "G"}
                       {#if source.iconUrl}
@@ -1436,11 +1744,18 @@
                     <span class="avatar-error-badge" class:checking={checking.includes(source.id)} class:uptodate={!checking.includes(source.id) && source.version && isInstalled(source)} title={sourceStatusLabel(source)} aria-hidden="true"></span>
                   {/if}
                 </div>
-                <button class="app-open-button" type="button" onclick={() => (selectedSourceId = source.id)} aria-label={`Open ${source.repo.split("/").at(-1)} details`}>
+                <button class="app-open-button" type="button" onclick={() => selectionMode ? toggleSelection(source.id) : (selectedSourceId = source.id)} aria-label={selectionMode ? `Toggle selection for ${source.repo.split("/").at(-1)}` : `Open ${source.repo.split("/").at(-1)} details`}>
                   <span class="app-details">
                     <span class="app-title-row">
                       <span class="app-name">{source.repo.split("/").at(-1)}</span>
                       {#if hasUpdate(source)}<span class="update-badge">Update available</span>{/if}
+                      {#if appCategories[source.id]?.length}
+                        <span class="category-badges">
+                          {#each appCategories[source.id] as cat}
+                            <span class="category-badge">{cat}</span>
+                          {/each}
+                        </span>
+                      {/if}
                     </span>
                     <span class="repo-link">by {source.repo.split("/").slice(0, -1).join("/")}</span>
                   </span>
@@ -1457,6 +1772,118 @@
       {/if}
     </section>
   </main>
+
+  {#if showFilterSheet}
+    <button class="bottom-sheet-overlay" onclick={closeFilterSheet} aria-label="Close filter sheet"></button>
+    <section class="bottom-sheet filter-sheet" aria-labelledby="filter-title">
+      <div class="sheet-header">
+        <h2 id="filter-title">Filtrar apps</h2>
+        <button class="close-button" type="button" onclick={closeFilterSheet} aria-label="Close filter">
+          <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg>
+        </button>
+      </div>
+      <div class="sheet-content">
+        <div class="filter-section">
+          <h3>Buscar por</h3>
+          <label class="filter-field">
+            <span class="filter-label">Nombre de app</span>
+            <input bind:value={filterName} placeholder="Filtrar por nombre de la aplicación" type="text" />
+          </label>
+          <label class="filter-field">
+            <span class="filter-label">Autor</span>
+            <input bind:value={filterAuthor} placeholder="Filtrar por autor/organización" type="text" />
+          </label>
+          <label class="filter-field">
+            <span class="filter-label">ID de la app</span>
+            <input bind:value={filterAppId} placeholder="Filtrar por identificador de paquete" type="text" />
+          </label>
+        </div>
+        <div class="filter-section">
+          <h3>Estado</h3>
+          <label class="filter-toggle">
+            <input type="checkbox" bind:value={filterUpdatedOnly} />
+            <span>Aplicaciones actualizadas</span>
+          </label>
+          <label class="filter-toggle">
+            <input type="checkbox" bind:value={filterNotInstalledOnly} />
+            <span>Apps no instaladas</span>
+          </label>
+        </div>
+        <div class="filter-section">
+          <h3>Filtrar por fuente</h3>
+          <label class="filter-field">
+            <span class="filter-label">Fuente</span>
+            <select bind:value={filterSource}>
+              <option value="">Todas las fuentes</option>
+              {#each allSources as src}
+                <option value={src}>{src}</option>
+              {/each}
+            </select>
+          </label>
+        </div>
+        <div class="filter-section">
+          <h3>Categoría / Etiqueta</h3>
+          <label class="filter-field">
+            <span class="filter-label">Categoría</span>
+            <select bind:value={filterCategory}>
+              <option value="">Todas las categorías</option>
+              {#each allCategories as cat}
+                <option value={cat}>{cat}</option>
+              {/each}
+            </select>
+          </label>
+          <div class="category-chips">
+            {#each allCategories as cat}
+              <button class="category-chip" class:active={filterCategory === cat} type="button" onclick={() => { filterCategory = filterCategory === cat ? "" : cat; }}>
+                {cat}
+              </button>
+            {/each}
+          </div>
+        </div>
+      </div>
+      <div class="sheet-actions">
+        <button class="secondary-button" type="button" onclick={clearFilters}>Cancelar</button>
+        <Button class="primary-button" variant="unelevated" type="button" onclick={applyFilters}>Continuar</Button>
+      </div>
+    </section>
+  {/if}
+
+  {#if showActionsSheet && selectionMode && selectedAppIds.size > 0}
+    <button class="bottom-sheet-overlay" onclick={() => { showActionsSheet = false; }} aria-label="Close actions sheet"></button>
+    <section class="bottom-sheet actions-sheet" aria-labelledby="actions-title">
+      <div class="sheet-header">
+        <h2 id="actions-title">Acciones ({selectedAppIds.size} seleccionadas)</h2>
+        <button class="close-button" type="button" onclick={() => { showActionsSheet = false; }} aria-label="Close actions">
+          <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg>
+        </button>
+      </div>
+      <div class="sheet-content">
+        <div class="action-list">
+          <button class="action-item destructive" type="button" onclick={batchDelete}>
+            <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor" aria-hidden="true"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>
+            <span>Eliminar</span>
+          </button>
+          <button class="action-item" type="button" onclick={batchCheckRelease}>
+            <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor" aria-hidden="true"><path d="M204-318q-22-38-33-78t-11-82q0-134 93-228t227-94h7l-64-64 56-56 160 160-160 160-56-56 64-64h-7q-100 0-170 70.5T240-478q0 26 6 51t18 49l-60 60ZM481-40 321-200l160-160 56 56-64 64h7q100 0 170-70.5T720-482q0-26-6-51t-18-49l60-60q22 38 33 78t11 82q0 134-93 228t-227 94h-7l64 64-56 56Z"/></svg>
+            <span>Comprobar release de nuevo</span>
+          </button>
+          <button class="action-item" type="button" onclick={batchInstallOrUpdate}>
+            <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor" aria-hidden="true"><path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></svg>
+            <span>Instalar o actualizar</span>
+          </button>
+          <button class="action-item" type="button" onclick={batchPin}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M16,12l2,2v2H13v6l-1,1l-1-1V16H6V14l2-2V5H7V3H17V5H16v7ZM8.85,14h6.3L14,12.85V5H10v7.85L8.85,14ZM12,14Z"/></svg>
+            <span>Anclar al principio</span>
+          </button>
+          <button class="action-item" type="button" onclick={batchUnpin}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M17,3V5H16v8.17l-2-2V5H10V7.18L7.83,5L7,4.17V3H17ZM12,23l-1-1V16H6V14l2-2V10.85L1.4,4.2L2.8,2.8L21.2,21.2l-1.45,1.4L13.15,16H13v6l-1,1ZM8.85,14h2.3l-1.1-1.1L10,12.85L8.85,14ZM12,9.17ZM10.05,12.9Z"/></svg>
+            <span>Desanclar</span>
+          </button>
+
+        </div>
+      </div>
+    </section>
+  {/if}
 
 </div>
 
@@ -1545,7 +1972,7 @@
   .summary-label { color: #898894; font-size: 11px; }
   .summary-card strong { overflow: hidden; color: #33323e; font-size: 17px; font-weight: 690; letter-spacing: -.35px; text-overflow: ellipsis; white-space: nowrap; }
   .platform-summary strong { font-size: 12px; }
-  .list-heading { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 38px 0 13px; }
+  .list-heading { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 38px 0 13px; flex-wrap: wrap; }
   .list-heading > div { display: flex; align-items: baseline; gap: 10px; }
   h2 { margin: 0; color: #302f3b; font-size: 15px; font-weight: 690; letter-spacing: -.2px; }
   .list-count { color: #a09faa; font-size: 11px; }
@@ -1596,12 +2023,14 @@
   .operation-progress-track { position: relative; height: 6px; overflow: hidden; border-radius: 4px; background: var(--surface-muted, #eee7f0); }
   .operation-progress-fill { display: block; height: 100%; border-radius: inherit; background: var(--accent, #705394); transition: width .18s ease; }
   .operation-progress-detail { color: var(--muted, #56515d); font-size: 12px; }
-  .search-box { display: flex; width: 232px; height: 34px; align-items: center; gap: 8px; padding: 0 9px; border: 1px solid #e9e8ef; border-radius: 6px; background: #fff; color: #a1a0ad; }
+  .search-box { display: flex; width: min(460px, 100%); height: 34px; align-items: center; justify-content: space-between; gap: 8px; padding: 0 6px 0 10px; border: 1px solid #e9e8ef; border-radius: 6px; background: #fff; color: #a1a0ad; }
+  .search-input { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 8px; }
   .search-box svg { width: 15px; height: 15px; flex: 0 0 auto; }
   .search-box input { width: 100%; min-width: 0; border: 0; outline: none; background: transparent; color: #454451; font-size: 11px; }
   .search-box input::placeholder { color: #aaa9b4; }
   .app-list { display: grid; gap: 10px; }
   :global(.app-card) { display: flex; min-height: 116px; flex-direction: column; border: 1px solid #eeedf3; border-radius: 9px; background: #fff; transition: border-color .15s, box-shadow .15s; }
+  :global(.app-card.app-card--pinned) { background: color-mix(in srgb, var(--accent, #705394) 12%, var(--surface, #f7f0f8)); border-color: color-mix(in srgb, var(--accent, #705394) 35%, var(--border, #e9e0ec)); }
   :global(.app-card:hover) { border-color: #e0dcf5; box-shadow: 0 4px 15px rgb(38 28 87 / 4%); }
   .app-card-content { display: flex; min-height: inherit; align-items: center; gap: 15px; padding: 17px 16px; }
   .app-open-button { display: flex; min-width: 0; flex: 1; align-items: center; gap: 15px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
@@ -1840,7 +2269,7 @@
     .list-heading { margin-top: 36px; }
     h2 { font-size: 20px; font-weight: 500; }
     .search-box {
-      width: min(340px, 38vw);
+      width: min(470px, 52vw);
       height: 46px;
       gap: 11px;
       padding: 0 17px;
@@ -1961,7 +2390,7 @@
   .page-heading { align-items: center; }
   h1 { color: var(--text); font-size: 34px; font-weight: 400; letter-spacing: -.5px; }
   .list-heading { margin: 22px 0 30px; }
-  .list-heading > div { display: none; }
+  .list-heading > .list-heading-title { display: none; }
   .search-box {
     width: 100%;
     height: 58px;
@@ -2090,5 +2519,304 @@
     :global(.detail-download) { width: calc(100% + 38px); min-height: 58px; margin-right: -19px; margin-left: -19px; font-size: 14px; }
     .detail-actions { gap: 8px; margin-top: 14px; padding: 17px 12px; border-radius: 22px; }
     .detail-install-button { min-width: 82px; padding: 0 12px; font-size: 13px; }
+  }
+
+  /* New styles for filter, sort, and multi-select */
+  .search-and-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    justify-content: flex-end;
+  }
+  .control-buttons {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 2px;
+    transform: translateY(-2px);
+  }
+  .search-box :global(.icon-button),
+  .search-box :global(.actions-button) {
+    height: 28px;
+    margin: 0;
+    align-self: center;
+  }
+  .search-box :global(.icon-button) {
+    min-width: 28px;
+    width: 28px;
+    padding: 0;
+  }
+  .search-box :global(.actions-button) {
+    min-width: 0;
+    padding: 0 10px;
+    font-size: 11px;
+  }
+  .control-buttons :global(.icon-button svg) {
+    width: 20px;
+    height: 20px;
+    fill: currentColor;
+    stroke: none;
+  }
+  :global(.app-card--selected) {
+    border-color: var(--accent, #705394);
+    background: color-mix(in srgb, var(--accent, #705394) 5%, transparent);
+  }
+  .selection-checkbox {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 8px;
+  }
+  .selection-checkbox input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    accent-color: var(--accent, #705394);
+    cursor: pointer;
+  }
+  .pinned-badge {
+    font-size: 12px;
+    margin-right: 4px;
+  }
+  .category-badges {
+    display: flex;
+    gap: 4px;
+    margin-left: 8px;
+    flex-wrap: wrap;
+  }
+  .category-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent, #705394) 15%, transparent);
+    color: var(--accent-strong, #60427f);
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  
+  /* Bottom sheets */
+  .bottom-sheet-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.3);
+    z-index: 100;
+    animation: fade-in 0.2s ease-out;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+  }
+  .bottom-sheet {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 101;
+    background: var(--surface-raised, #fffaff);
+    border-radius: 24px 24px 0 0;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
+    animation: slide-up 0.3s ease-out;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .filter-sheet {
+    width: 100%;
+    max-width: 480px;
+    margin: 0 auto;
+  }
+  .actions-sheet {
+    width: 100%;
+    max-width: 480px;
+    margin: 0 auto;
+  }
+  .sheet-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border, #e9e0ec);
+  }
+  .sheet-header h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text, #24212a);
+  }
+  .close-button {
+    display: grid;
+    width: 40px;
+    height: 40px;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--muted, #56515d);
+    cursor: pointer;
+    transition: background 0.16s ease, color 0.16s ease;
+  }
+  .close-button:hover {
+    background: var(--surface-muted, #eee7f0);
+    color: var(--accent, #705394);
+  }
+  .sheet-content {
+    padding: 20px 24px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .filter-section {
+    margin-bottom: 24px;
+  }
+  .filter-section:last-child {
+    margin-bottom: 0;
+  }
+  .filter-section h3 {
+    margin: 0 0 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--subtle, #817b87);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .filter-field {
+    display: grid;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .filter-field:last-child {
+    margin-bottom: 0;
+  }
+  .filter-label {
+    font-size: 12px;
+    color: var(--muted, #56515d);
+  }
+  .filter-field input,
+  .filter-field select {
+    padding: 10px 12px;
+    border: 1px solid var(--border, #e9e0ec);
+    border-radius: 10px;
+    background: var(--surface, #f7f0f8);
+    color: var(--text, #24212a);
+    font: inherit;
+    font-size: 14px;
+  }
+  .filter-field input:focus,
+  .filter-field select:focus {
+    outline: none;
+    border-color: var(--accent, #705394);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #705394) 20%, transparent);
+  }
+  .filter-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+    cursor: pointer;
+  }
+  .filter-toggle input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    accent-color: var(--accent, #705394);
+    flex-shrink: 0;
+  }
+  .filter-toggle span {
+    font-size: 14px;
+    color: var(--text, #24212a);
+  }
+  .category-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .category-chip {
+    padding: 6px 12px;
+    border: 1px solid var(--border, #e9e0ec);
+    border-radius: 999px;
+    background: var(--surface, #f7f0f8);
+    color: var(--muted, #56515d);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.16s ease;
+  }
+  .category-chip:hover {
+    border-color: var(--accent, #705394);
+    color: var(--accent-strong, #60427f);
+  }
+  .category-chip.active {
+    background: var(--accent, #705394);
+    border-color: var(--accent, #705394);
+    color: white;
+  }
+  .sheet-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 24px;
+    border-top: 1px solid var(--border, #e9e0ec);
+    background: var(--surface, #f7f0f8);
+    border-radius: 0 0 24px 24px;
+  }
+  .secondary-button {
+    padding: 10px 20px;
+    border: 1px solid var(--border, #e9e0ec);
+    border-radius: 10px;
+    background: var(--surface-raised, #fffaff);
+    color: var(--text, #24212a);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.16s ease;
+  }
+  .secondary-button:hover {
+    background: var(--surface-muted, #eee7f0);
+    border-color: var(--accent, #705394);
+  }
+  .action-list {
+    display: grid;
+    gap: 4px;
+  }
+  .action-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 14px 16px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text, #24212a);
+    font-size: 14px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.16s ease;
+  }
+  .action-item:hover {
+    background: var(--surface-muted, #eee7f0);
+  }
+  .action-item.destructive {
+    color: #b84b48;
+  }
+  .action-item.destructive:hover {
+    background: color-mix(in srgb, #b84b48 10%, transparent);
+  }
+  .action-item svg {
+    flex: 0 0 auto;
+    color: var(--muted, #56515d);
+  }
+  .action-item.destructive svg {
+    color: #b84b48;
+  }
+  
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes slide-up {
+    from { transform: translateY(100%); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
   }
 </style>
