@@ -1,4 +1,3 @@
-
 name: Translate README
 
 on:
@@ -28,7 +27,7 @@ jobs:
         with:
           ref: master
           token: ${{ secrets.TRANSLATION_TOKEN }}
-      
+
       - name: Create translation branch
         run: |
           git config user.name "github-actions[bot]"
@@ -42,7 +41,16 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Restore cached translations
+        id: cache-translations
+        uses: actions/cache@v4
+        with:
+          path: README.*.md
+          key: readme-translations-${{ hashFiles('README.md') }}
+
       - name: Translate README - Chinese
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: livrasand/gh-translate-readme@v1.0.0
         with:
           LANG: zh-CN
@@ -50,7 +58,13 @@ jobs:
           FLAG: cn
           SOURCE_LANG: en
 
+      - name: Wait before next translation
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        run: sleep 15
+
       - name: Translate README - Hindi
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: livrasand/gh-translate-readme@v1.0.0
         with:
           LANG: hi
@@ -58,7 +72,13 @@ jobs:
           FLAG: in
           SOURCE_LANG: en
 
+      - name: Wait before next translation
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        run: sleep 15
+
       - name: Translate README - Spanish
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: livrasand/gh-translate-readme@v1.0.0
         with:
           LANG: es
@@ -66,7 +86,13 @@ jobs:
           FLAG: es
           SOURCE_LANG: en
 
+      - name: Wait before next translation
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        run: sleep 15
+
       - name: Translate README - Arabic
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: livrasand/gh-translate-readme@v1.0.0
         with:
           LANG: ar
@@ -74,7 +100,13 @@ jobs:
           FLAG: sa
           SOURCE_LANG: en
 
+      - name: Wait before next translation
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        run: sleep 15
+
       - name: Translate README - French
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: livrasand/gh-translate-readme@v1.0.0
         with:
           LANG: fr
@@ -82,7 +114,13 @@ jobs:
           FLAG: fr
           SOURCE_LANG: en
 
+      - name: Wait before next translation
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        run: sleep 15
+
       - name: Translate README - Bengali
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: livrasand/gh-translate-readme@v1.0.0
         with:
           LANG: bn
@@ -90,7 +128,13 @@ jobs:
           FLAG: bd
           SOURCE_LANG: en
 
+      - name: Wait before next translation
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        run: sleep 15
+
       - name: Translate README - Portuguese
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: livrasand/gh-translate-readme@v1.0.0
         with:
           LANG: pt
@@ -98,7 +142,13 @@ jobs:
           FLAG: pt
           SOURCE_LANG: en
 
+      - name: Wait before next translation
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        run: sleep 15
+
       - name: Translate README - Indonesian
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: livrasand/gh-translate-readme@v1.0.0
         with:
           LANG: id
@@ -106,7 +156,13 @@ jobs:
           FLAG: id
           SOURCE_LANG: en
 
+      - name: Wait before next translation
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        run: sleep 15
+
       - name: Translate README - Urdu
+        if: steps.cache-translations.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: livrasand/gh-translate-readme@v1.0.0
         with:
           LANG: ur
