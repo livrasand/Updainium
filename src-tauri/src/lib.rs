@@ -1,6 +1,6 @@
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-use std::{fs, io::Write, process::Command};
+use std::{fs, io::{Read, Write}, process::Command};
 mod backup;
 mod github;
 mod process;
@@ -194,6 +194,7 @@ pub fn run() {
             get_installed_app_version,
             uninstall_app,
             download_release_asset,
+            hash_file,
             fetch_release_metadata,
             fetch_repository_icon,
             open_in_editor
@@ -1209,6 +1210,21 @@ async fn download_release_asset(
         sha256,
         verified: expected_sha256.is_some(),
     })
+}
+
+#[tauri::command]
+fn hash_file(path: String) -> Result<String, String> {
+    let mut file = fs::File::open(&path).map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 #[cfg(test)]

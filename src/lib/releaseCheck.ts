@@ -95,6 +95,9 @@ export async function checkSourceFlow(
       );
     }
 
+    const sameAsset =
+      source.assetUrl === asset.browser_download_url &&
+      (source.sha256 ?? undefined) === (asset.sha256 ?? undefined);
     const updated: TrackedSource = {
       ...source,
       version: release.tag_name || release.name || "Unversioned release",
@@ -106,9 +109,17 @@ export async function checkSourceFlow(
       checkedAt: now(),
       error: "",
       iconUrl: iconUrl ?? source.iconUrl,
-      downloadPath: undefined,
-      downloadedSha256: undefined,
-      hashVerified: undefined,
+      downloadPath: sameAsset ? source.downloadPath : undefined,
+      downloadedSha256: sameAsset ? source.downloadedSha256 : undefined,
+      hashVerified: sameAsset ? source.hashVerified : undefined,
+      verificationStatus: sameAsset && source.hashVerified === true
+        ? "verified"
+        : sameAsset && source.hashVerified === false
+          ? "failed"
+          : asset.sha256
+            ? "pending"
+            : "unavailable",
+      signatureStatus: source.signatureStatus ?? "unavailable",
     };
     return { source: updated, ok: true };
   } catch (error) {
