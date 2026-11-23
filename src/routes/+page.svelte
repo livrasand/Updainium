@@ -4,7 +4,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+  import { open as openFileDialog, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
   import { openPath, openUrl } from "@tauri-apps/plugin-opener";
   import { marked } from "marked";
   import DOMPurify from "dompurify";
@@ -72,6 +72,7 @@
   let appFileDragOver = $state(false);
   let checking = $state<string[]>([]);
   let downloading = $state<string | null>(null);
+  let verifying = $state<string | null>(null);
   let uninstalling = $state<string | null>(null);
   let downloadProgress = $state<DownloadProgressEvent | null>(null);
   let installedVersions = $state<Record<string, string | null | undefined>>({});
@@ -180,7 +181,18 @@
 
   const renderedReleaseNotes = $derived.by(() => {
     const notes = selectedSource?.releaseNotes;
-    return notes?.trim() ? DOMPurify.sanitize(marked.parse(notes, { async: false })) : "";
+    if (!notes?.trim()) return "";
+    const html = marked.parse(notes, { async: false }) as string;
+    const repoPath = selectedSource?.repo?.replace(/^github\.com\//i, "") ?? "";
+    const tag = selectedSource?.version;
+    const base =
+      repoPath && tag
+        ? `https://raw.githubusercontent.com/${repoPath}/${encodeURIComponent(tag).replace(/%2F/g, "/")}/`
+        : null;
+    const rewritten = base
+      ? html.replace(/src=(["'])\.\/([^"']+)\1/g, (_match, quote, path) => `src=${quote}${base}${path}${quote}`)
+      : html.replace(/<img\b[^>]*src=(["'])\.\/[^"']*\1[^>]*>/gi, "");
+    return DOMPurify.sanitize(rewritten);
   });
 
   function releaseNoteLinkOpener(node: HTMLElement): { destroy(): void } {
@@ -458,8 +470,8 @@
         title: `Remove ${source.repo} from library`,
         category: "Source",
         keywords: ["delete"],
-        run: () => {
-          removeSource(source);
+        run: async () => {
+          await removeSource(source);
         },
       }),
     ];
@@ -615,6 +627,21 @@
     checking = [...checking, id];
     try {
       const { provider, reference } = resolveProvider(source.url);
+      if (!source.appIdentifier) {
+        try {
+          const appName = reference.repositoryPath.split("/").at(-1) ?? "";
+          const identifier = await invoke<string | null>("identify_installed_app_identifier", {
+            appName,
+          });
+          if (identifier) {
+            sources = sources.map((item) =>
+              item.id === id ? { ...item, appIdentifier: identifier } : item,
+            );
+          }
+        } catch {
+          // Automatic detection is optional; manual identification remains available.
+        }
+      }
       const repositoryApiUrl = provider.repoApiUrl(reference);
       let iconUrl = source.iconUrl;
       if (!iconUrl) {
@@ -971,6 +998,7 @@
 
   function canInstallOrUpdate(source: TrackedSource): boolean {
     if (!source.assetUrl || checking.includes(source.id) || anyOperationInFlight()) return false;
+    if (source.verificationStatus === "failed" || source.hashVerified === false) return false;
     if (
       source.appIdentifier && installedVersions[source.id] === undefined &&
       !source.lastKnownInstalledVersion && !installedCheckErrors.includes(source.id)
@@ -995,10 +1023,58 @@
     }
   }
 
+  async function verifySource(source: TrackedSource): Promise<void> {
+    if (!source.assetUrl || verifying === source.id) return;
+    verifying = source.id;
+    sources = sources.map((item) => (item.id === source.id ? { ...item, error: "" } : item));
+    try {
+      if (source.downloadPath) {
+        const actual = await invoke<string>("hash_file", { path: source.downloadPath });
+        const verified = Boolean(source.sha256) && actual.toLowerCase() === source.sha256?.toLowerCase();
+        sources = sources.map((item) =>
+          item.id === source.id
+            ? {
+                ...item,
+                downloadedSha256: actual,
+                hashVerified: verified,
+                verificationStatus: verified ? "verified" : source.sha256 ? "failed" : "unavailable",
+              }
+            : item,
+        );
+        await persistSources();
+        showSnackbar(verified ? "Checksum verified." : "Checksum verification failed.", 6000, verified ? "info" : "error");
+      } else {
+        const downloaded = await invoke<{ path: string; sha256: string; verified: boolean }>("download_release_asset", {
+          url: source.assetUrl,
+          fileName: source.assetName,
+          expectedSha256: source.sha256 ?? null,
+          downloadId: source.id,
+        });
+        sources = sources.map((item) =>
+          item.id === source.id
+            ? {
+                ...item,
+                downloadPath: downloaded.path,
+                downloadedSha256: downloaded.sha256,
+                hashVerified: downloaded.verified,
+                verificationStatus: downloaded.verified ? "verified" : source.sha256 ? "failed" : "unavailable",
+              }
+            : item,
+        );
+        await persistSources();
+        showSnackbar(downloaded.verified ? "Checksum verified." : "Checksum verification failed.", 6000, downloaded.verified ? "info" : "error");
+      }
+    } catch (error) {
+      setSourceError(source.id, `Could not verify the app: ${messageOf(error)}`);
+    } finally {
+      verifying = null;
+    }
+  }
+
   async function uninstallApp(source: TrackedSource): Promise<void> {
     if (!canUninstall(source) || !source.appIdentifier) return;
     const appName = source.repo.split("/").at(-1) ?? source.repo;
-    if (!confirm(`Uninstall ${appName} from this device?`)) return;
+    if (!(await confirmDialog(`Uninstall ${appName} from this device?`))) return;
     uninstalling = source.id;
     sources = sources.map((item) => (item.id === source.id ? { ...item, error: "" } : item));
     try {
@@ -1125,8 +1201,8 @@
     }
   }
 
-  function removeSource(source: TrackedSource): boolean {
-    if (!confirm(`Remove ${source.repo} from your catalog?`)) return false;
+  async function removeSource(source: TrackedSource): Promise<boolean> {
+    if (!(await confirmDialog(`Remove ${source.repo} from your catalog?`))) return false;
     deleteResumeSession(source.id);
     sources = sources.filter((item) => item.id !== source.id);
     persistSources();
@@ -1207,7 +1283,7 @@
     if (!confirm(`Delete ${selectedAppIds.size} selected app(s)?`)) return;
     for (const id of selectedAppIds) {
       const source = sources.find((s) => s.id === id);
-      if (source) removeSource(source);
+      if (source) await removeSource(source);
     }
     clearSelection();
     showActionsSheet = false;
@@ -1465,6 +1541,7 @@
               <div class="detail-asset">{selectedSource.assetName || `Looking for ${selectedSource.assetExtension || "a release asset"}`}</div>
               <div class="release-published">Release date: {releaseDateLabel(selectedSource.releaseDate)}</div>
             </div>
+            {#if isInstalled(selectedSource)}
             <div class="installed-version">
               <span class="detail-section-label">Installed version</span>
               {#if selectedSource.installedVersionSource === "manual" && selectedSource.lastKnownInstalledVersion}
@@ -1502,6 +1579,7 @@
                 </div>
                 <div class="installed-version-hint">Set an older version to preview update availability and release notes.</div>
               </div>
+            {/if}
             {/if}
             {#if selectedSource.downloadPath}
               <button class="reopen-link" type="button" onclick={() => reopenDownloaded(selectedSource)}>Open downloaded file</button>
@@ -1541,6 +1619,30 @@
                 No published checksum available. SHA-256 will be calculated after download, but cannot be verified against the source.
               {/if}
             </div>
+            <div class="verification-status" style={selectedSource.verificationStatus === "verified" || selectedSource.hashVerified === true ? "color: #1d9bf0;" : selectedSource.verificationStatus === "failed" || selectedSource.hashVerified === false ? "color: #e9254f;" : ""}>
+              Integrity status:
+              {#if selectedSource.verificationStatus === "verified" || selectedSource.hashVerified === true}
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="18px" width="18px" fill="currentColor" aria-hidden="true" style="vertical-align:middle;"><path d="M8.6,22.5L6.7,19.3L3.1,18.5l0.35-3.7L1,12L3.45,9.2L3.1,5.5L6.7,4.7L8.6,1.5L12,2.95L15.4,1.5l1.9,3.2l3.6,0.8L20.55,9.2L23,12l-2.45,2.8l0.35,3.7l-3.6,0.8l-1.9,3.2L12,21.05L8.6,22.5Zm0.85-2.55L12,18.85l2.6,1.1l1.4-2.4l2.75-0.65L18.5,14.1L20.35,12L18.5,9.85l0.25-2.8L16,6.45l-1.45-2.4L12,5.15L9.4,4.05L8,6.45L5.25,7.05L5.5,9.85L3.65,12L5.5,14.1L5.25,16.95L8,17.55l1.45,2.4ZM12,12Zm-1.05,3.55L16.6,9.9L15.2,8.45L10.95,12.7L8.8,10.6L7.4,12l3.55,3.55Z"/></svg>
+              {:else if selectedSource.verificationStatus === "failed" || selectedSource.hashVerified === false}
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="18px" width="18px" fill="currentColor" aria-hidden="true" style="vertical-align:middle;"><path d="M14.65,11.85L16.6,9.9L15.2,8.45l-1.97,1.97l1.42,1.43Zm6.2,6.2l-2.2-2.2L18.5,14.1L20.35,12L18.5,9.85l0.25-2.8L16,6.45l-1.45-2.4L12,5.15L9.4,4.05L8.48,5.65L7,4.17L8.6,1.5L12,2.95L15.4,1.5l1.9,3.2l3.6,0.8L20.55,9.2L23,12l-2.45,2.8l0.3,3.25Zm-11.4,1.9L12,18.85l2.6,1.1l0.95-1.6l-3.7-3.7l-0.9,0.9L7.4,12l1.4-1.4l2.15,2.1l-0.53,0.53L5.35,8.15L5.5,9.85L3.65,12L5.5,14.1L5.25,16.95L8,17.55l1.45,2.4ZM8.6,22.5L6.7,19.3L3.1,18.5l0.35-3.7L1,12L3.45,9.2L3.15,5.95L1.4,4.2L2.8,2.8L21.2,21.2l-1.4,1.4L17,19.8l-1.6,2.7L12,21.05L8.6,22.5Zm4.63-12.08ZM9.6,12.4Z"/></svg>
+              {:else if selectedSource.sha256}
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="18px" width="18px" fill="currentColor" aria-hidden="true" style="vertical-align:middle;"><path d="M8.06,13.06Q8.5,12.63 8.5,12T8.06,10.94T7,10.5T5.94,10.94T5.5,12t0.44,1.06T7,13.5t1.06-0.44Zm5,0Q13.5,12.63 13.5,12t-0.44-1.06T12,10.5t-1.06,0.44T10.5,12t0.44,1.06T12,13.5t1.06-0.44Zm5,0Q18.5,12.63 18.5,12t-0.44-1.06T17,10.5t-1.06,0.44T15.5,12t0.44,1.06T17,13.5t1.06-0.44ZM12,22q-2.07,0-3.9-0.79q-1.82-0.79-3.17-2.14Q3.58,17.73 2.79,15.9T2,12Q2,9.92 2.79,8.1Q3.58,6.27 4.93,4.93Q6.28,3.57 8.1,2.79Q9.93,2 12,2t3.9,0.79t3.17,2.14q1.35,1.35 2.14,3.17Q22,9.92 22,12t-0.79,3.9t-2.14,3.17q-1.35,1.35-3.17,2.14T12,22Zm0-2q3.35,0 5.68-2.32T20,12T17.68,6.32T12,4T6.33,6.32T4,12t2.33,5.68T12,20Zm0-8Z"/></svg>
+              {/if}
+              <strong>
+                {selectedSource.verificationStatus === "verified" || selectedSource.hashVerified === true
+                  ? "Verified"
+                  : selectedSource.verificationStatus === "failed" || selectedSource.hashVerified === false
+                    ? "Verification failed"
+                    : selectedSource.sha256
+                      ? "Pending verification"
+                      : "No checksum available"}
+              </strong>
+            </div>
+            {#if isInstalled(selectedSource)}
+            <button class="mark-current-button" type="button" title="Verify checksum" disabled={verifying !== null} style={verifying !== null ? "opacity:0.6;pointer-events:none;cursor:not-allowed;" : ""} onclick={() => verifySource(selectedSource)}>
+              {verifying === selectedSource.id ? "Verifying..." : "Verify checksum"}
+            </button>
+            {/if}
           </section>
           <section class="detail-card source-card" aria-label="Source details">
             <a class="detail-repository" href={selectedSource.url} target="_blank" rel="noreferrer">{selectedSource.url}</a>
@@ -1595,7 +1697,7 @@
             <button class="detail-icon-button" type="button" aria-label="Check release again" title="Check release again" onclick={() => refreshSource(selectedSource)} disabled={checking.includes(selectedSource.id)}>
               <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" class="detail-icon-filled" class:spinning={checking.includes(selectedSource.id)} aria-hidden="true"><path d="M204-318q-22-38-33-78t-11-82q0-134 93-228t227-94h7l-64-64 56-56 160 160-160 160-56-56 64-64h-7q-100 0-170 70.5T240-478q0 26 6 51t18 49l-60 60ZM481-40 321-200l160-160 56 56-64 64h7q100 0 170-70.5T720-482q0-26-6-51t-18-49l60-60q22 38 33 78t11 82q0 134-93 228t-227 94h-7l64 64-56 56Z"/></svg>
             </button>
-            <button class="detail-icon-button" type="button" aria-label={`Remove ${selectedSource.repo}`} title="Remove app" onclick={() => { if (removeSource(selectedSource)) selectedSourceId = null; }}>
+            <button class="detail-icon-button" type="button" aria-label={`Remove ${selectedSource.repo}`} title="Remove app" onclick={async () => { if (await removeSource(selectedSource)) selectedSourceId = null; }}>
               <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" class="detail-icon-filled" aria-hidden="true"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>
             </button>
             <button

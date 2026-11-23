@@ -5,7 +5,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { setDockVisibility } from "@tauri-apps/api/app";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+  import { open as openFileDialog, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
   import { copyFile, exists, mkdir, remove, writeTextFile } from "@tauri-apps/plugin-fs";
   import { appConfigDir, BaseDirectory } from "@tauri-apps/api/path";
   import { openPath } from "@tauri-apps/plugin-opener";
@@ -223,7 +223,7 @@
     if (!name || name.includes("/") || !plugins.includes(name)) {
       throw new Error("Choose a plugin from the installed plugins folder.");
     }
-    if (!confirm(`Uninstall ${name}? Its commands and providers will stop loading.`)) return;
+    if (!(await confirmDialog(`Uninstall ${name}? Its commands and providers will stop loading.`))) return;
 
     await remove(`plugins/${name}`, { baseDir: BaseDirectory.AppConfig });
     await loadUserPlugins();
@@ -309,7 +309,7 @@
     if (!name || name.includes("/") || !themes.includes(name)) {
       throw new Error("Choose a theme from the installed themes folder.");
     }
-    if (!confirm(`Uninstall ${name}?`)) return;
+    if (!(await confirmDialog(`Uninstall ${name}?`))) return;
 
     await uninstallTheme(name);
     showSnackbar(`Theme uninstalled: ${name}`);

@@ -46,6 +46,8 @@ export async function downloadAndOpenFlow(
     downloadPath: undefined,
     downloadedSha256: undefined,
     hashVerified: undefined,
+    verificationStatus: source.verificationStatus,
+    signatureStatus: source.signatureStatus,
   };
   dependencies.deleteResumeSession?.(source.id);
 
@@ -123,6 +125,11 @@ export async function downloadAndOpenFlow(
       downloadPath: downloaded.path,
       downloadedSha256: downloaded.sha256,
       hashVerified: downloaded.verified,
+      verificationStatus: downloaded.verified
+        ? "verified"
+        : working.sha256
+          ? "failed"
+          : "unavailable",
     };
 
     await dependencies.openPath(downloaded.path);
@@ -137,6 +144,7 @@ export async function downloadAndOpenFlow(
         ...working,
         downloadedSha256: verificationFailure[1],
         hashVerified: false,
+        verificationStatus: "failed",
       };
     }
     const detail = working.downloadPath

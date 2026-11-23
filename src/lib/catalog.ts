@@ -19,6 +19,9 @@ export type TrackedSource = {
   sha256?: string;
   downloadedSha256?: string;
   hashVerified?: boolean;
+  verificationStatus?: "verified" | "pending" | "unverified" | "failed" | "unavailable";
+  signatureStatus?: "valid" | "invalid" | "unavailable";
+  signatureIdentity?: string;
   lastKnownInstalledVersion?: string;
   installedVersionSource?: "detected" | "manual";
 };
@@ -64,6 +67,11 @@ export function isValidTrackedSource(value: unknown): value is TrackedSource {
     (source.sha256 === undefined || typeof source.sha256 === "string") &&
     (source.downloadedSha256 === undefined || typeof source.downloadedSha256 === "string") &&
     (source.hashVerified === undefined || typeof source.hashVerified === "boolean") &&
+    (source.verificationStatus === undefined ||
+      ["verified", "pending", "unverified", "failed", "unavailable"].includes(String(source.verificationStatus))) &&
+    (source.signatureStatus === undefined ||
+      ["valid", "invalid", "unavailable"].includes(String(source.signatureStatus))) &&
+    (source.signatureIdentity === undefined || typeof source.signatureIdentity === "string") &&
     (source.iconUrl === undefined || typeof source.iconUrl === "string")
   );
 }
