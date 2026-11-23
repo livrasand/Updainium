@@ -9,9 +9,6 @@ on:
 permissions:
   contents: read
 
-env:
-  RUST_CACHE_KEY: ${{ runner.os }}-rust-${{ hashFiles('**/Cargo.lock') }}
-
 jobs:
   typecheck:
     name: Typecheck (frontend)
@@ -85,7 +82,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             src-tauri/target/
-          key: ${{ env.RUST_CACHE_KEY }}
+          key: ${{ runner.os }}-rust-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-rust-
 
