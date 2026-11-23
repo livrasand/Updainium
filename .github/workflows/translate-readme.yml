@@ -1,0 +1,114 @@
+
+name: Translate README
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'README.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: translate-readme
+  cancel-in-progress: false
+
+jobs:
+  translate:
+    name: Translate README
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Chinese (Mandarin)
+      - name: Translate README - Chinese
+        uses: livrasand/gh-translate-readme@v1.0.0
+        with:
+          LANG: zh-CN
+          LANG_NAME: 简体中文
+          FLAG: cn
+          SOURCE_LANG: en
+
+      # Hindi
+      - name: Translate README - Hindi
+        uses: livrasand/gh-translate-readme@v1.0.0
+        with:
+          LANG: hi
+          LANG_NAME: हिन्दी
+          FLAG: in
+          SOURCE_LANG: en
+
+      # Spanish
+      - name: Translate README - Spanish
+        uses: livrasand/gh-translate-readme@v1.0.0
+        with:
+          LANG: es
+          LANG_NAME: Español
+          FLAG: es
+          SOURCE_LANG: en
+
+      # Arabic
+      - name: Translate README - Arabic
+        uses: livrasand/gh-translate-readme@v1.0.0
+        with:
+          LANG: ar
+          LANG_NAME: العربية
+          FLAG: sa
+          SOURCE_LANG: en
+
+      # French
+      - name: Translate README - French
+        uses: livrasand/gh-translate-readme@v1.0.0
+        with:
+          LANG: fr
+          LANG_NAME: Français
+          FLAG: fr
+          SOURCE_LANG: en
+
+      # Bengali
+      - name: Translate README - Bengali
+        uses: livrasand/gh-translate-readme@v1.0.0
+        with:
+          LANG: bn
+          LANG_NAME: বাংলা
+          FLAG: bd
+          SOURCE_LANG: en
+
+      # Portuguese
+      - name: Translate README - Portuguese
+        uses: livrasand/gh-translate-readme@v1.0.0
+        with:
+          LANG: pt
+          LANG_NAME: Português
+          FLAG: pt
+          SOURCE_LANG: en
+
+      # Indonesian
+      - name: Translate README - Indonesian
+        uses: livrasand/gh-translate-readme@v1.0.0
+        with:
+          LANG: id
+          LANG_NAME: Bahasa Indonesia
+          FLAG: id
+          SOURCE_LANG: en
+
+      # Urdu
+      - name: Translate README - Urdu
+        uses: livrasand/gh-translate-readme@v1.0.0
+        with:
+          LANG: ur
+          LANG_NAME: اردو
+          FLAG: pk
+          SOURCE_LANG: en
