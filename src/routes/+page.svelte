@@ -70,6 +70,11 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
   let sourceAppIdentifier = $state("");
   let sourceExtension = $state("");
   let sourceArchitecture = $state<Architecture>("auto");
+  let editUpdateChannel = $state<"stable" | "beta">("stable");
+  let editSkippedVersion = $state("");
+  let editIgnoredUntil = $state("");
+  let editIgnoreDays = $state("");
+  let editIgnoreIndefinitely = $state(false);
   let adding = $state(false);
   let identifyingAppIdentifier = $state(false);
   let appFileDragOver = $state(false);
@@ -804,6 +809,16 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
     sourceAppIdentifier = source.appIdentifier ?? "";
     sourceExtension = source.assetExtension ?? "";
     sourceArchitecture = source.assetArchitecture ?? "auto";
+    editUpdateChannel = source.updateChannel ?? "stable";
+    editSkippedVersion = source.skippedVersion ?? "";
+    editIgnoredUntil = source.ignoredUntil ?? "";
+    if (source.ignoredUntil) {
+      const ms = new Date(source.ignoredUntil).getTime() - Date.now();
+      editIgnoreDays = ms > 0 ? String(Math.ceil(ms / (24 * 60 * 60 * 1000))) : "";
+    } else {
+      editIgnoreDays = "";
+    }
+    editIgnoreIndefinitely = source.ignoreIndefinitely ?? false;
     showAddSection = true;
   }
 
@@ -886,6 +901,10 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
         appIdentifier: appIdentifier || undefined,
         assetExtension: extension || undefined,
         assetArchitecture: sourceArchitecture,
+        updateChannel: editUpdateChannel,
+        skippedVersion: editSkippedVersion.trim() || undefined,
+        ignoredUntil: editIgnoreIndefinitely ? undefined : Number(editIgnoreDays) > 0 ? new Date(Date.now() + Number(editIgnoreDays) * 24 * 60 * 60 * 1000).toISOString() : undefined,
+        ignoreIndefinitely: editIgnoreIndefinitely || undefined,
         version: "",
         assetName: "",
         assetUrl: "",
@@ -1043,6 +1062,48 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
     );
     installedVersionEditorOpenFor = null;
     persistSources();
+  }
+
+  function setUpdateChannel(source: TrackedSource, channel: "stable" | "beta"): void {
+    sources = sources.map((item) => (item.id === source.id ? { ...item, updateChannel: channel } : item));
+    persistSources();
+  }
+
+  function skipThisVersion(source: TrackedSource): void {
+    if (!source.version) return;
+    sources = sources.map((item) => (item.id === source.id ? { ...item, skippedVersion: source.version } : item));
+    persistSources();
+    showSnackbar(`Skipped ${source.version} for ${appNameFor(source)}.`);
+  }
+
+  function reconsiderSkippedVersion(source: TrackedSource): void {
+    sources = sources.map((item) => (item.id === source.id ? { ...item, skippedVersion: undefined } : item));
+    persistSources();
+  }
+
+  function ignoreAppTemporarily(source: TrackedSource, days: number): void {
+    const until = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    sources = sources.map((item) =>
+      item.id === source.id ? { ...item, ignoredUntil: until, ignoreIndefinitely: false } : item,
+    );
+    persistSources();
+    showSnackbar(`${appNameFor(source)} ignored until ${new Date(until).toLocaleDateString()}.`);
+  }
+
+  function ignoreAppIndefinitely(source: TrackedSource): void {
+    sources = sources.map((item) =>
+      item.id === source.id ? { ...item, ignoreIndefinitely: true, ignoredUntil: undefined } : item,
+    );
+    persistSources();
+    showSnackbar(`${appNameFor(source)} ignored indefinitely.`);
+  }
+
+  function restoreIgnoredApp(source: TrackedSource): void {
+    sources = sources.map((item) =>
+      item.id === source.id ? { ...item, ignoredUntil: undefined, ignoreIndefinitely: false } : item,
+    );
+    persistSources();
+    showSnackbar(`Update notifications restored for ${appNameFor(source)}.`);
   }
 
   function installedVersionIsCurrent(source: TrackedSource): boolean {
@@ -1599,7 +1660,30 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
                 {/each}
               </select>
             </label>
-            <p class="add-hint">The latest release will be checked for the chosen extension and architecture, or matched to this platform automatically — including extensionless executables such as frankenphp-linux-x86_64 — when no extension is set. The identifier must match the app bundle, package, or uninstall registry entry on this device.</p>
+            {#if editingSourceId}
+              <div class="add-field" style="width:100%;">
+                <span class="visually-hidden">Update channel</span>
+                <label style="width:100%;display:block;">
+                  Update channel
+                  <select bind:value={editUpdateChannel} style="width:100%;">
+                    <option value="stable">Stable</option>
+                    <option value="beta">Beta</option>
+                  </select>
+                </label>
+              </div>
+              <div class="add-field">
+                <span class="visually-hidden">Skipped version</span>
+                <input bind:value={editSkippedVersion} placeholder="Skipped version (optional)" type="text" />
+              </div>
+              <div class="add-field">
+                <span class="visually-hidden">Ignore for days</span>
+                <input bind:value={editIgnoreDays} placeholder="Ignore for (days)" type="number" min="0" />
+              </div>
+              <label class="filter-toggle" style="margin-top:-16px;margin-left:30px;display:flex;align-items:center;gap:6px;">
+                <input type="checkbox" bind:checked={editIgnoreIndefinitely} />
+                <span>Ignore indefinitely</span>
+              </label>
+            {/if}
             <div class="add-actions">
               <button class="back-link" type="button" onclick={() => { showAddSection = false; editingSourceId = null; }}>Cancel</button>
               <Button class="primary-button" variant="unelevated" type="submit" disabled={adding}>
@@ -1869,6 +1953,14 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
             } else {
               editingSourceId = null;
               sourceAppIdentifier = "";
+              sourceExtension = "";
+              sourceArchitecture = "auto";
+              sourceUrl = "";
+              editUpdateChannel = "stable";
+              editSkippedVersion = "";
+              editIgnoredUntil = "";
+              editIgnoreIndefinitely = false;
+              editIgnoreDays = "";
               showAddSection = true;
             }
           }}>
@@ -1982,6 +2074,8 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
                     <span class="app-title-row">
                       <span class="app-name">{source.repo.split("/").at(-1)}</span>
                       {#if hasUpdate(source)}<span class="update-badge">Update available</span>{/if}
+                      {#if source.ignoreIndefinitely || source.ignoredUntil}<span class="update-badge" style="background:#9e9e9e;">Ignored</span>{/if}
+                      {#if source.skippedVersion}<span class="update-badge" style="background:#ff9800;">Skipped {source.skippedVersion}</span>{/if}
                       {#if appCategories[source.id]?.length}
                         <span class="category-badges">
                           {#each appCategories[source.id] as cat}
@@ -2456,7 +2550,7 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
   .identifier-field-row .add-field { min-width: 0; flex: 1; }
   :global(.identify-button) { flex: 0 0 auto; }
   .identifier-field-row.app-file-drag-over { outline: 2px solid var(--accent, #705394); outline-offset: 4px; }
-  .app-file-hint { margin: -8px 6px 0; color: var(--muted, #56515d); font-size: 12px; }
+  .app-file-hint { margin: -8px 30px 0; color: var(--muted, #56515d); font-size: 12px; }
   .add-field { display: flex; min-height: 76px; align-items: center; gap: 14px; padding: 0 22px 0 26px; border: 1px solid transparent; border-radius: 26px; background: var(--surface-muted, #eee7f0); color: var(--muted, #56515d); transition: border-color .18s ease, background .18s ease, box-shadow .18s ease; }
   .add-field:focus-within { border-color: color-mix(in srgb, var(--accent, #705394) 34%, transparent); background: var(--surface-raised, #fffaff); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent, #705394) 9%, transparent); }
   .add-field input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text, #24212a); font-size: 17px; }

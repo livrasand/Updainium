@@ -24,6 +24,10 @@ export type TrackedSource = {
   signatureIdentity?: string;
   lastKnownInstalledVersion?: string;
   installedVersionSource?: "detected" | "manual";
+  updateChannel?: "stable" | "beta";
+  skippedVersion?: string;
+  ignoredUntil?: string;
+  ignoreIndefinitely?: boolean;
 };
 
 const architectureValues = ["auto", "x86_64", "aarch64", "x86", "arm"];
@@ -105,6 +109,12 @@ export function isValidTrackedSource(value: unknown): value is TrackedSource {
     (source.signatureStatus === undefined ||
       ["valid", "invalid", "unavailable"].includes(String(source.signatureStatus))) &&
     (source.signatureIdentity === undefined || typeof source.signatureIdentity === "string") &&
-    (source.iconUrl === undefined || typeof source.iconUrl === "string")
+    (source.iconUrl === undefined || typeof source.iconUrl === "string") &&
+    (source.updateChannel === undefined ||
+      source.updateChannel === "stable" ||
+      source.updateChannel === "beta") &&
+    (source.skippedVersion === undefined || typeof source.skippedVersion === "string") &&
+    (source.ignoredUntil === undefined || typeof source.ignoredUntil === "string") &&
+    (source.ignoreIndefinitely === undefined || typeof source.ignoreIndefinitely === "boolean")
   );
 }

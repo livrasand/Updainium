@@ -1,5 +1,6 @@
 import type { TrackedSource } from "./catalog.ts";
 import { extractVersionNumbers, resolveInstalledVersion, hasUpdate as hasVersionUpdate } from "./versionComparison.ts";
+import { isIgnored, isSkippedVersion, isPrereleaseVersion } from "./updateChannels.ts";
 import { createDownloadManager, type DownloadDependencies, type DownloadResult } from "./downloadFlow.ts";
 
 export type UpdateAllStatus =
@@ -138,6 +139,12 @@ export function isEligibleForUpdateAll(
 ): boolean {
   if (!source || !source.assetUrl) return false;
   if (!isVerifiedSource(source)) return false;
+  // Update channels & version management: excluded apps / skipped versions do
+  // not participate in Smart Update All.
+  if (isIgnored(source)) return false;
+  if (source.skippedVersion && isSkippedVersion(source, source.version)) return false;
+  const channel = source.updateChannel === "beta" ? "beta" : "stable";
+  if (channel === "stable" && isPrereleaseVersion(source.version)) return false;
   const installed = resolveInstalledForSource(source, installedVersions);
   if (!installed) return false;
   if (!hasVersionUpdate(installed, source.version)) return false;
