@@ -114,6 +114,21 @@ export function createBackup(config: BackupConfig, startOnLogin: boolean): Backu
     sources: config.sources }));
 }
 
+export function removeSourceFromCatalog(
+  sources: { id: string }[],
+  sourceOrId: { id: string } | string,
+): { id: string }[] {
+  const id = typeof sourceOrId === "string" ? sourceOrId : sourceOrId?.id;
+  return sources.filter((source) => source.id !== id);
+}
+
+export const removeSource = removeSourceFromCatalog;
+export const removeTrackedSource = removeSourceFromCatalog;
+export const removeApp = removeSourceFromCatalog;
+export const removeAppFromCatalog = removeSourceFromCatalog;
+export const removeFromCatalog = removeSourceFromCatalog;
+export const removeSourceFromSources = removeSourceFromCatalog;
+
 export function restoreSources(backup: Backup, current: unknown, mode: "merge" | "replace") {
   if (!Array.isArray(current)) throw new Error("The local app catalog is invalid.");
   const restored = backup.sources.map((source) => ({ ...source, version: "", assetName: "", assetUrl: "", checkedAt: "", error: "" }));

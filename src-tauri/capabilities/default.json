@@ -11,7 +11,11 @@
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
+    "dialog:default",
     "dialog:allow-open",
+    "dialog:allow-message",
+    "dialog:allow-confirm",
+    "dialog:allow-ask",
     "opener:default",
     {
       "identifier": "fs:allow-read-dir",
