@@ -11,6 +11,8 @@
   import "github-markdown-css";
   import { assetForExtension, assetForPlatform, formats, type Platform } from "#lib/assets";
   import { type TrackedSource } from "#lib/catalog";
+  import { isIgnored } from "#lib/updateChannels";
+  import { isIntelOnly as isIntelOnlySource, isDiscontinued as isDiscontinuedSource, hasCheckFailure, isFavorite as isFavoriteSource, isRecent as isRecentSource } from "#lib/applicationFilters";
   import { registerCommand } from "#lib/commands";
   import { loadUserPlugins, resolveProvider } from "#lib/registry";
   import { getSettings, getSetting, loadSettings, setSetting, updateSettings } from "#lib/settings.svelte";
@@ -117,6 +119,16 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
   let filterNotInstalledOnly = $state(false);
   let filterSource = $state("");
   let filterCategory = $state("");
+  // Primary application views and advanced application filters (#125)
+  let primaryView = $state<"all" | "ignored">("all");
+  let showViewsMenu = $state(false);
+  let showSortMenu = $state(false);
+  let filterIntelOnly = $state(false);
+  let filterDiscontinued = $state(false);
+  let filterCheckFailures = $state(false);
+  let filterFavorites = $state(false);
+  let filterRecent = $state(false);
+  let favoriteIds = $state<Set<string>>(new Set());
   let sortBy: "name" | "author" | "lastUpdated" | "updateStatus" | "pinned" = $state("name");
   let sortDirection: "asc" | "desc" = $state("asc");
   let selectionMode = $state(false);
@@ -180,6 +192,18 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
         if (filterCategory && (!appCategories[source.id] || !appCategories[source.id].includes(filterCategory))) {
           return false;
         }
+        // Primary views (#125)
+        const ignored = isIgnored(source);
+        if (primaryView === "ignored" && !ignored) return false;
+        if (primaryView === "all") {
+          // All view intentionally includes ignored applications.
+        }
+        // Advanced application filters (#125)
+        if (filterIntelOnly && !isIntelOnlySource(source)) return false;
+        if (filterDiscontinued && !isDiscontinuedSource(source)) return false;
+        if (filterCheckFailures && !hasCheckFailure(source)) return false;
+        if (filterFavorites && !isFavoriteSource(source, favoriteIds)) return false;
+        if (filterRecent && !isRecentSource(source, { now: new Date() })) return false;
         return true;
       })
       .sort((a, b) => {
@@ -358,6 +382,14 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
       const savedPinned = getSetting("plugins.pinned");
       if (Array.isArray(savedPinned)) {
         appPinned = new Set(savedPinned.filter((id): id is string => typeof id === "string"));
+      }
+      const savedView = getSetting("plugins.applicationView");
+      if (savedView === "all" || savedView === "ignored") {
+        primaryView = savedView;
+      }
+      const savedFavorites = getSetting("plugins.favorites");
+      if (Array.isArray(savedFavorites)) {
+        favoriteIds = new Set(savedFavorites.filter((id): id is string => typeof id === "string"));
       }
       resumeSessions = parseResumeSessions(localStorage.getItem(resumeStorageKey));
     } catch (error) {
@@ -1411,6 +1443,34 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
     });
   }
 
+  function saveFavorites(): void {
+    if (!ready) return;
+    void setSetting("plugins.favorites", [...favoriteIds]).catch((error) => {
+      showSnackbar(`Could not save favorite apps: ${messageOf(error)}`, 6000, "error");
+    });
+  }
+
+  function setPrimaryView(view: "all" | "ignored"): void {
+    primaryView = view;
+    if (ready) {
+      void setSetting("plugins.applicationView", view).catch((error) => {
+        showSnackbar(`Could not save view preference: ${messageOf(error)}`, 6000, "error");
+      });
+    }
+  }
+
+  function toggleFavorite(sourceId: string): void {
+    const next = new Set(favoriteIds);
+    if (next.has(sourceId)) next.delete(sourceId);
+    else next.add(sourceId);
+    favoriteIds = next;
+    saveFavorites();
+  }
+
+  function isFavorite(sourceId: string): boolean {
+    return favoriteIds.has(sourceId);
+  }
+
   function togglePin(sourceId: string): void {
     const newPinned = new Set(appPinned);
     if (newPinned.has(sourceId)) {
@@ -1483,6 +1543,26 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
     showActionsSheet = false;
   }
 
+  async function batchFavorite(): Promise<void> {
+    if (selectedAppIds.size === 0) return;
+    const next = new Set(favoriteIds);
+    for (const id of selectedAppIds) next.add(id);
+    favoriteIds = next;
+    saveFavorites();
+    clearSelection();
+    showActionsSheet = false;
+  }
+
+  async function batchUnfavorite(): Promise<void> {
+    if (selectedAppIds.size === 0) return;
+    const next = new Set(favoriteIds);
+    for (const id of selectedAppIds) next.delete(id);
+    favoriteIds = next;
+    saveFavorites();
+    clearSelection();
+    showActionsSheet = false;
+  }
+
   // Filter sheet actions
   function openFilterSheet(): void {
     showFilterSheet = true;
@@ -1516,32 +1596,42 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
         filterUpdatedOnly ||
         filterNotInstalledOnly ||
         filterSource ||
-        filterCategory,
+        filterCategory ||
+        primaryView !== "all" ||
+        filterIntelOnly ||
+        filterDiscontinued ||
+        filterCheckFailures ||
+        filterFavorites ||
+        filterRecent,
     ),
   );
 
   // Sort actions
-  function setSortBy(newSortBy: typeof sortBy): void {
-    if (sortBy === newSortBy) {
-      sortDirection = sortDirection === "asc" ? "desc" : "asc";
-    } else {
-      sortBy = newSortBy;
-      sortDirection = "asc";
-    }
-    if (ready) {
-      void setSetting("plugins.sort", { sortBy, sortDirection }).catch((error) => {
-        showSnackbar(`Could not save sort preferences: ${messageOf(error)}`, 6000, "error");
-      });
-    }
+  function persistSort(): void {
+    if (!ready) return;
+    void setSetting("plugins.sort", { sortBy, sortDirection }).catch((error) => {
+      showSnackbar(`Could not save sort preferences: ${messageOf(error)}`, 6000, "error");
+    });
   }
 
-  const sortModes: ("name" | "author" | "lastUpdated" | "updateStatus" | "pinned")[] = ["name", "author", "lastUpdated", "updateStatus", "pinned"];
-  function cycleSort(): void {
-    const currentIndex = sortModes.indexOf(sortBy);
-    const nextSortBy = sortModes[(currentIndex + 1) % sortModes.length];
-    setSortBy(nextSortBy);
-    showSnackbar(`Sorted by: ${nextSortBy} (${sortDirection === "asc" ? "ascending" : "descending"})`);
+  function setSortBy(newSortBy: typeof sortBy): void {
+    sortBy = newSortBy;
+    persistSort();
   }
+
+  function setSortDirection(newDirection: typeof sortDirection): void {
+    sortDirection = newDirection;
+    persistSort();
+  }
+
+  const sortOptions: { value: "name" | "author" | "lastUpdated" | "updateStatus" | "pinned"; label: string }[] = [
+    { value: "name", label: "Name" },
+    { value: "author", label: "Author" },
+    { value: "lastUpdated", label: "Last updated" },
+    { value: "updateStatus", label: "Update status" },
+    { value: "pinned", label: "Pinned" },
+  ];
+
 
   // Get unique categories for filter dropdown
   const allCategories = $derived(
@@ -1594,7 +1684,7 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
       <div class="sync-indicator" class:checking={checking.length > 0} aria-live="polite" aria-atomic="true">
         <span class="sync-dot" aria-hidden="true"></span>
         <span class="sync-label">{syncLabel}</span>
-        <button class="sync-button" type="button" aria-label="Check for updates" title="Check for updates" disabled={!sources.length || checking.length > 0} onclick={refreshAll}>
+        <button class="sync-button" type="button" aria-label="Check for updates" data-tooltip="Check for updates" disabled={!sources.length || checking.length > 0} onclick={refreshAll}>
           <svg height="16px" viewBox="0 -960 960 960" width="16px" fill="currentColor" aria-hidden="true" class:spinning={checking.length > 0}><path d="M204-318q-22-38-33-78t-11-82q0-134 93-228t227-94h7l-64-64 56-56 160 160-160 160-56-56 64-64h-7q-100 0-170 70.5T240-478q0 26 6 51t18 49l-60 60ZM481-40 321-200l160-160 56-56-64 64h7q100 0 170-70.5T720-482q0-26-6-51t-18-49l60-60q22 38 33 78t11 82q0 134-93 228t-227 94h-7l64 64-56 56Z"/></svg>
         </button>
       </div>
@@ -1603,7 +1693,7 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
       {#if showAddSection}
         <section class="add-section" aria-labelledby="add-title">
           <div class="add-heading">
-            <button class="back-button" type="button" aria-label="Back to apps" onclick={() => { showAddSection = false; editingSourceId = null; }}>
+            <button class="back-button" type="button" aria-label="Back to apps" data-tooltip="Back to apps" onclick={() => { showAddSection = false; editingSourceId = null; }}>
               <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M640-80 240-480l400-400 71 71-329 329 329 329-71 71Z"/></svg>
             </button>
             <h1 id="add-title">{editingSourceId ? "Edit app" : "Add an app"}</h1>
@@ -1695,7 +1785,7 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
       {:else if selectedSource}
         <section class="app-detail" aria-labelledby="detail-title">
           <div class="detail-identity">
-            <button class="back-button" type="button" aria-label="Back to apps" onclick={() => (selectedSourceId = null)}>
+            <button class="back-button" type="button" aria-label="Back to apps" data-tooltip="Back to apps" onclick={() => (selectedSourceId = null)}>
               <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M640-80 240-480l400-400 71 71-329 329 329 329-71 71Z"/></svg>
             </button>
             <div class="detail-avatar" aria-hidden="true">
@@ -1901,13 +1991,13 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
           </section>
 
           <div class="detail-actions">
-            <button class="detail-icon-button" type="button" aria-label={`Edit ${selectedSource.repo}`} title="Edit app" onclick={() => editSource(selectedSource)} disabled={checking.includes(selectedSource.id) || operationInFlight(selectedSource)}>
+            <button class="detail-icon-button" type="button" aria-label={`Edit ${selectedSource.repo}`} data-tooltip="Edit app" onclick={() => editSource(selectedSource)} disabled={checking.includes(selectedSource.id) || operationInFlight(selectedSource)}>
               <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" class="detail-icon-filled" aria-hidden="true"><path d="M200-200h57l391-391-57-57-391 391v57Zm-80 80v-170l528-527q12-11 26.5-17t30.5-6q16 0 31 6t26 18l55 56q12 11 17.5 26t5.5 30q0 16-5.5 30.5T817-647L290-120H120Zm640-584-56-56 56 56Zm-141 85-28-29 57 57-29-28Z"/></svg>
             </button>
-            <button class="detail-icon-button" type="button" aria-label="Check release again" title="Check release again" onclick={() => refreshSource(selectedSource)} disabled={checking.includes(selectedSource.id)}>
+            <button class="detail-icon-button" type="button" aria-label="Check release again" data-tooltip="Check release again" onclick={() => refreshSource(selectedSource)} disabled={checking.includes(selectedSource.id)}>
               <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" class="detail-icon-filled" class:spinning={checking.includes(selectedSource.id)} aria-hidden="true"><path d="M204-318q-22-38-33-78t-11-82q0-134 93-228t227-94h7l-64-64 56-56 160 160-160 160-56-56 64-64h-7q-100 0-170 70.5T240-478q0 26 6 51t18 49l-60 60ZM481-40 321-200l160-160 56 56-64 64h7q100 0 170-70.5T720-482q0-26-6-51t-18-49l60-60q22 38 33 78t11 82q0 134-93 228t-227 94h-7l64 64-56 56Z"/></svg>
             </button>
-            <button class="detail-icon-button" type="button" aria-label={`Remove ${selectedSource.repo}`} title="Remove app" onclick={async () => { if (await removeSource(selectedSource)) selectedSourceId = null; }}>
+            <button class="detail-icon-button" type="button" aria-label={`Remove ${selectedSource.repo}`} data-tooltip="Remove app" onclick={async () => { if (await removeSource(selectedSource)) selectedSourceId = null; }}>
               <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" class="detail-icon-filled" aria-hidden="true"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>
             </button>
             <button
@@ -1938,13 +2028,13 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
             variant="text"
             type="button"
             aria-label="Check for updates"
-            title="Check for updates"
+            data-tooltip="Check for updates"
             onclick={refreshAll}
             disabled={!sources.length || checking.length > 0}
           >
             <svg class:spinning={checking.length > 0} xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M204-318q-22-38-33-78t-11-82q0-134 93-228t227-94h7l-64-64 56-56 160 160-160 160-56-56 64-64h-7q-100 0-170 70.5T240-478q0 26 6 51t18 49l-60 60ZM481-40 321-200l160-160 56 56-64 64h7q100 0 170-70.5T720-482q0-26-6-51t-18-49l60-60q22 38 33 78t11 82q0 134-93 228t-227 94h-7l64 64-56 56Z"/></svg>
           </Button>
-          <a class="settings-button" href="/settings" aria-label="Settings" title="Settings">
+          <a class="settings-button" href="/settings" aria-label="Settings" data-tooltip="Settings">
             <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="m370-80-16-128q-13-5-24.5-12T307-235l-119 50L78-375l103-78q-1-7-1-13.5v-27q0-6.5 1-13.5L78-585l110-190 119 50q11-8 23-15t24-12l16-128h220l16 128q13 5 24.5 12t22.5 15l119-50 110 190-103 78q1 7 1 13.5v27q0 6.5-2 13.5l103 78-110 190-118-50q-11 8-23 15t-24 12L590-80H370Zm70-80h79l14-106q31-8 57.5-23.5T639-327l99 41 39-68-86-65q5-14 7-29.5t2-31.5q0-16-2-31.5t-7-29.5l86-65-39-68-99 42q-22-23-48.5-38.5T533-694l-13-106h-79l-14 106q-31 8-57.5 23.5T321-633l-99-41-39 68 86 64q-5 15-7 30t-2 32q0 16 2 31t7 30l-86 65 39 68 99-42q22 23 48.5 38.5T427-266l13 106Zm42-180q58 0 99-41t41-99q0-58-41-99t-99-41q-59 0-99.5 41T342-480q0 58 40.5 99t99.5 41Zm-2-140Z"/></svg>
           </a>
           <Button class="primary-button add-button" variant="unelevated" type="button" onclick={() => {
@@ -2005,18 +2095,63 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
             </label>
             <div class="control-buttons">
               {#if selectedAppIds.size > 0}
-                <Button class="icon-button" variant="text" type="button" aria-label="Clear selection" onclick={clearSelection}>
+                <Button class="icon-button" variant="text" type="button" aria-label="Clear selection" data-tooltip="Clear selection" onclick={clearSelection}>
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M19.78,22.6L14.18,17H7V9.82L1.4,4.22L2.8,2.8L21.2,21.2l-1.43,1.4ZM9,15h3.18L9,11.83V15Zm8-0.83l-2-2V9H11.83l-2-2H17v7.17ZM5,19v2q-0.83,0-1.41-0.59T3,19H5ZM3,17V15H5v2H3Zm0-4V11H5v2H3ZM3,9V7H5V9H3ZM7,21V19H9v2H7ZM7,5V3H9V5H7Zm4,16V19h2v2H11ZM11,5V3h2V5H11Zm4,16V19h2v2H15ZM15,5V3h2V5H15Zm4,12V15h2v2H19Zm0-4V11h2v2H19Zm0-4V7h2V9H19Zm0-4V3q0.83,0 1.41,0.59T21,5H19Z"/></svg>
                 </Button>
               {:else}
-                <Button class="icon-button" variant="text" type="button" aria-label="Select all" onclick={selectAll}>
+                <Button class="icon-button" variant="text" type="button" aria-label="Select all" data-tooltip="Select all" onclick={selectAll}>
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M7,17V7H17V17H7Zm2-2h6V9H9v6ZM5,19v2q-0.83,0-1.41-0.59T3,19H5ZM3,17V15H5v2H3Zm0-4V11H5v2H3ZM3,9V7H5V9H3ZM5,5H3Q3,4.17 3.59,3.59T5,3V5ZM7,21V19H9v2H7ZM7,5V3H9V5H7Zm4,16V19h2v2H11ZM11,5V3h2V5H11Zm4,16V19h2v2H15ZM15,5V3h2V5H15Zm4,16V19h2q0,0.82-0.59,1.41T19,21Zm0-4V15h2v2H19Zm0-4V11h2v2H19Zm0-4V7h2V9H19Zm0-4V3q0.83,0 1.41,0.59T21,5H19Z"/></svg>
                 </Button>
               {/if}
-              <span style="font-size: 12px; color: var(--muted, #6b6a78); min-width: 18px; text-align: center; margin-top: 10px; margin-left: -8px;">{sources.length}</span>
-              <Button class="icon-button" variant="text" type="button" aria-label={`Sort by ${sortBy}`} title={`Sort by ${sortBy} (${sortDirection})`} onclick={cycleSort}>
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M10,18V16h4v2H10ZM6,13V11H18v2H6ZM3,8V6H21V8H3Z"/></svg>
-              </Button>
+              <span class="control-count">{sources.length}</span>
+              <div class="views-menu">
+                <button type="button" class="icon-button" aria-label="Sort" data-tooltip="Sort" aria-expanded={showSortMenu} onclick={() => (showSortMenu = !showSortMenu)}>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M3,18V16H9v2H3Zm0-5V11H15v2H3ZM3,8V6H21V8H3Z"/></svg>
+                </button>
+                {#if showSortMenu}
+                  <button class="menu-overlay" type="button" aria-label="Close sort menu" onclick={() => (showSortMenu = false)}></button>
+                  <div class="views-menu-panel">
+                    <div class="menu-section">
+                      <span class="menu-section-title">Sort by</span>
+                      {#each sortOptions as option (option.value)}
+                        <button type="button" class:active={sortBy === option.value} aria-pressed={sortBy === option.value} onclick={() => setSortBy(option.value)}>{option.label}</button>
+                      {/each}
+                    </div>
+                    <div class="menu-section">
+                      <span class="menu-section-title">Order</span>
+                      <div class="segmented" role="group" aria-label="Sort order">
+                        <button type="button" class:active={sortDirection === "asc"} aria-pressed={sortDirection === "asc"} onclick={() => setSortDirection("asc")}>Ascending</button>
+                        <button type="button" class:active={sortDirection === "desc"} aria-pressed={sortDirection === "desc"} onclick={() => setSortDirection("desc")}>Descending</button>
+                      </div>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+              <div class="views-menu">
+                <button type="button" class="icon-button" aria-label="Views and filters" data-tooltip="Views and filters" onclick={() => (showViewsMenu = !showViewsMenu)}>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="24px" width="24px" fill="#1f1f1f" aria-hidden="true"><path d="M10,18V16h4v2H10ZM6,13V11H18v2H6ZM3,8V6H21V8H3Z"/></svg>
+                </button>
+                {#if showViewsMenu}
+                  <button class="menu-overlay" type="button" aria-label="Close views menu" onclick={() => (showViewsMenu = false)}></button>
+                  <div class="views-menu-panel">
+                    <div class="menu-section">
+                      <span class="menu-section-title">Views</span>
+                      <div class="segmented" role="group" aria-label="Views">
+                        <button type="button" class:active={primaryView === "all"} aria-pressed={primaryView === "all"} onclick={() => { setPrimaryView("all"); }}>All ({sources.length})</button>
+                        <button type="button" class:active={primaryView === "ignored"} aria-pressed={primaryView === "ignored"} onclick={() => { setPrimaryView("ignored"); }}>Ignored ({sources.filter((s) => isIgnored(s)).length})</button>
+                      </div>
+                    </div>
+                    <div class="menu-section">
+                      <span class="menu-section-title">Filters</span>
+                      <label><input type="checkbox" bind:checked={filterIntelOnly} /><span class="filter-name">Intel-only</span><span class="filter-count">{sources.filter((s) => isIntelOnlySource(s)).length}</span></label>
+                      <label><input type="checkbox" bind:checked={filterDiscontinued} /><span class="filter-name">Discontinued</span><span class="filter-count">{sources.filter((s) => isDiscontinuedSource(s)).length}</span></label>
+                      <label><input type="checkbox" bind:checked={filterCheckFailures} /><span class="filter-name">Check failures</span><span class="filter-count">{sources.filter((s) => hasCheckFailure(s)).length}</span></label>
+                      <label><input type="checkbox" bind:checked={filterFavorites} /><span class="filter-name">Favorites</span><span class="filter-count">{favoriteIds.size}</span></label>
+                      <label><input type="checkbox" bind:checked={filterRecent} /><span class="filter-name">Recent</span><span class="filter-count">{sources.filter((s) => isRecentSource(s, { now: new Date() })).length}</span></label>
+                    </div>
+                  </div>
+                {/if}
+              </div>
             </div>
           </div>
           {#if checking.length > 0}
@@ -2105,7 +2240,7 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
     <section class="bottom-sheet filter-sheet" aria-labelledby="filter-title">
       <div class="sheet-header">
         <h2 id="filter-title">Filter apps</h2>
-        <button class="close-button" type="button" onclick={closeFilterSheet} aria-label="Close filter">
+        <button class="close-button" type="button" onclick={closeFilterSheet} aria-label="Close filter" data-tooltip="Close">
           <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg>
         </button>
       </div>
@@ -2180,7 +2315,7 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
     <section class="bottom-sheet actions-sheet" aria-labelledby="actions-title">
       <div class="sheet-header">
         <h2 id="actions-title">Actions ({selectedAppIds.size} selected)</h2>
-        <button class="close-button" type="button" onclick={() => { showActionsSheet = false; }} aria-label="Close actions">
+        <button class="close-button" type="button" onclick={() => { showActionsSheet = false; }} aria-label="Close actions" data-tooltip="Close">
           <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg>
         </button>
       </div>
@@ -2205,6 +2340,14 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
           <button class="action-item" type="button" onclick={batchUnpin}>
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M17,3V5H16v8.17l-2-2V5H10V7.18L7.83,5L7,4.17V3H17ZM12,23l-1-1V16H6V14l2-2V10.85L1.4,4.2L2.8,2.8L21.2,21.2l-1.45,1.4L13.15,16H13v6l-1,1ZM8.85,14h2.3l-1.1-1.1L10,12.85L8.85,14ZM12,9.17ZM10.05,12.9Z"/></svg>
             <span>Unpin</span>
+          </button>
+          <button class="action-item" type="button" onclick={batchFavorite}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M12,17.27L18.18,21l-1.64-7.03L22,9.24l-7.19-0.61L12,2L9.19,8.63L2,9.24l5.46,4.73L5.82,21Z"/></svg>
+            <span>Mark favorite</span>
+          </button>
+          <button class="action-item" type="button" onclick={batchUnfavorite}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M22,9.24l-7.19-0.62L12,2L9.19,8.63L2,9.24l5.46,4.73L5.82,21L12,17.27L18.18,21l-1.63-7.03L22,9.24ZM12,15.4l-3.76,2.27l1-4.28l-3.32-2.88l4.38-0.37L12,6.1l1.71,4.04l4.38,0.37l-3.32,2.88l1,4.28L12,15.4Z"/></svg>
+            <span>Remove favorite</span>
           </button>
 
         </div>
@@ -2275,13 +2418,13 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
   .sync-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #9E9E9E; box-shadow: 0 0 0 3px color-mix(in srgb, #9E9E9E 25%, transparent); }
   .sync-indicator.checking .sync-dot { background: #2196F3; animation: sync-pulse 2s ease-in-out infinite; box-shadow: 0 0 0 3px color-mix(in srgb, #2196F3 30%, transparent); }
   .sync-label { font-size: 12px; font-weight: 500; }
-  .sync-button { display: grid; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #6b6a78; cursor: pointer; transition: background .16s ease, color .16s ease; }
+  .sync-button { display: grid; width: 40px; height: 40px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #6b6a78; cursor: pointer; transition: background .16s ease, color .16s ease; }
   .sync-button:hover { background: #f2efff; color: #6148d5; }
   .sync-button:disabled { opacity: .5; cursor: wait; }
-  .sync-button svg { width: 16px; height: 16px; fill: currentColor; stroke: none; }
+  .sync-button svg { width: 21px; height: 21px; fill: currentColor; stroke: none; }
   @keyframes sync-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
   .content { width: min(1120px, 100%); margin: 0 auto; padding: 39px 48px 54px; }
-  .page-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
+  .page-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
   .heading-actions { display: flex; align-items: center; gap: 8px; }
   .settings-button { display: grid; width: 40px; height: 40px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--accent); transition: color .16s ease; }
   .settings-button:hover { color: var(--accent-strong, var(--accent)); }
@@ -2432,6 +2575,27 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
   .summary-card strong { overflow: hidden; color: #33323e; font-size: 17px; font-weight: 690; letter-spacing: -.35px; text-overflow: ellipsis; white-space: nowrap; }
   .platform-summary strong { font-size: 12px; }
   .list-heading { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 38px 0 13px; flex-wrap: wrap; }
+  .views-menu { position: relative; display: inline-flex; align-items: center; vertical-align: middle; }
+  .views-menu .icon-button { display: inline-flex; align-items: center; justify-content: center; height: 28px; min-width: 28px; width: 28px; padding: 0; margin: 0; }
+  .views-menu .icon-button svg { width: 20px; height: 20px; fill: #1f1f1f; stroke: none; }
+  .views-menu .menu-overlay { position: fixed; inset: 0; background: transparent; border: 0; z-index: 20; }
+  .views-menu-panel { position: absolute; right: 0; top: calc(100% + 8px); z-index: 21; min-width: 260px; padding: 16px; border: none; border-radius: 16px; background: color-mix(in srgb, var(--accent, #705394) 95%, var(--surface, #fff)); box-shadow: 0 12px 32px rgba(0,0,0,.18); display: flex; flex-direction: column; gap: 12px; }
+  .menu-section { display: flex; flex-direction: column; gap: 8px; }
+  .menu-section:not(:last-child) { padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,.2); }
+  .menu-section-title { font-size: 11px; font-weight: 700; color: rgba(255,255,255,.8); text-transform: uppercase; letter-spacing: .8px; }
+  .views-menu-panel .segmented { display: flex; gap: 4px; padding: 4px; border-radius: 999px; background: rgba(0,0,0,.16); }
+  .views-menu-panel .segmented button { flex: 1 1 0; padding: 8px 12px; border-radius: 999px; text-align: center; font-size: 13px; font-weight: 500; color: rgba(255,255,255,.85); }
+  .views-menu-panel .segmented button:hover { background: rgba(255,255,255,.12); color: #fff; }
+  .views-menu-panel .segmented button.active { background: #fff; color: var(--accent, #705394); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+  .views-menu-panel .segmented button.active:hover { background: #fff; }
+  .views-menu-panel button { text-align: left; border: 0; background: transparent; padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 14px; color: rgba(255,255,255,.85); transition: all .2s ease; }
+  .views-menu-panel button:hover { background: rgba(255,255,255,.12); color: #fff; }
+  .views-menu-panel button.active { background: rgba(255,255,255,.25); color: #fff; font-weight: 500; }
+  .views-menu-panel label { display: flex; align-items: center; gap: 12px; width: 100%; box-sizing: border-box; padding: 8px 12px; font-size: 14px; text-align: left; white-space: nowrap; cursor: pointer; color: rgba(255,255,255,.9); border-radius: 8px; transition: background .2s ease; }
+  .views-menu-panel label:hover { background: rgba(255,255,255,.12); }
+  .views-menu-panel label input { flex: 0 0 auto; margin: 0; width: 16px; height: 16px; cursor: pointer; accent-color: #fff; }
+  .filter-name { flex: 1 1 auto; }
+  .filter-count { flex: 0 0 auto; font-size: 12px; opacity: .7; }
   .list-heading > div { display: flex; align-items: baseline; gap: 10px; }
   h2 { margin: 0; color: #302f3b; font-size: 15px; font-weight: 690; letter-spacing: -.2px; }
   .list-count { color: #a09faa; font-size: 11px; }
@@ -2995,8 +3159,8 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
     display: flex;
     flex: 0 0 auto;
     align-items: center;
-    gap: 2px;
-    transform: translateY(-2px);
+    gap: 4px;
+    transform: none;
   }
   .search-box :global(.icon-button),
   .search-box :global(.actions-button) {
@@ -3013,6 +3177,28 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
     min-width: 0;
     padding: 0 10px;
     font-size: 11px;
+  }
+  .control-buttons :global(.mdc-button.icon-button),
+  .views-menu .icon-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+  }
+  .control-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 28px;
+    margin: 0;
+    color: var(--muted, #6b6a78);
+    font-size: 12px;
+    line-height: 1;
   }
   .control-buttons :global(.icon-button svg) {
     width: 20px;

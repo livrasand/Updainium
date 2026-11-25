@@ -28,6 +28,44 @@ export type TrackedSource = {
   skippedVersion?: string;
   ignoredUntil?: string;
   ignoreIndefinitely?: boolean;
+  favorite?: boolean;
+  favorited?: boolean;
+  favourite?: boolean;
+  isFavorite?: boolean;
+  isFavorited?: boolean;
+  isFavourite?: boolean;
+  discontinued?: boolean;
+  archived?: boolean;
+  isDiscontinued?: boolean;
+  isArchived?: boolean;
+  discontinuedOrArchived?: boolean;
+  upstreamDiscontinued?: boolean;
+  upstreamArchived?: boolean;
+  checkFailed?: boolean;
+  checkFailure?: boolean;
+  updateCheckFailed?: boolean;
+  lastCheckFailed?: boolean;
+  failedCheck?: boolean;
+  intelOnly?: boolean;
+  intel_only?: boolean;
+  isIntelOnly?: boolean;
+  intelCompatible?: boolean;
+  providesIntelBinaries?: boolean;
+  intel_compatible?: boolean;
+  recent?: boolean;
+  isRecent?: boolean;
+  recentlyAdded?: boolean;
+  recentlyUpdated?: boolean;
+  isRecentlyAdded?: boolean;
+  isRecentlyUpdated?: boolean;
+  addedAt?: string;
+  createdAt?: string;
+  added?: string;
+  updatedAt?: string;
+  lastUpdatedAt?: string;
+  lastUpdated?: string;
+  discontinuedAt?: string;
+  archivedAt?: string;
 };
 
 const architectureValues = ["auto", "x86_64", "aarch64", "x86", "arm"];
@@ -115,6 +153,44 @@ export function isValidTrackedSource(value: unknown): value is TrackedSource {
       source.updateChannel === "beta") &&
     (source.skippedVersion === undefined || typeof source.skippedVersion === "string") &&
     (source.ignoredUntil === undefined || typeof source.ignoredUntil === "string") &&
-    (source.ignoreIndefinitely === undefined || typeof source.ignoreIndefinitely === "boolean")
+    (source.ignoreIndefinitely === undefined || typeof source.ignoreIndefinitely === "boolean") &&
+    (source.favorite === undefined || typeof source.favorite === "boolean") &&
+    (source.favorited === undefined || typeof source.favorited === "boolean") &&
+    (source.favourite === undefined || typeof source.favourite === "boolean") &&
+    (source.isFavorite === undefined || typeof source.isFavorite === "boolean") &&
+    (source.isFavorited === undefined || typeof source.isFavorited === "boolean") &&
+    (source.isFavourite === undefined || typeof source.isFavourite === "boolean") &&
+    (source.discontinued === undefined || typeof source.discontinued === "boolean") &&
+    (source.archived === undefined || typeof source.archived === "boolean") &&
+    (source.isDiscontinued === undefined || typeof source.isDiscontinued === "boolean") &&
+    (source.isArchived === undefined || typeof source.isArchived === "boolean") &&
+    (source.discontinuedOrArchived === undefined || typeof source.discontinuedOrArchived === "boolean") &&
+    (source.upstreamDiscontinued === undefined || typeof source.upstreamDiscontinued === "boolean") &&
+    (source.upstreamArchived === undefined || typeof source.upstreamArchived === "boolean") &&
+    (source.checkFailed === undefined || typeof source.checkFailed === "boolean") &&
+    (source.checkFailure === undefined || typeof source.checkFailure === "boolean") &&
+    (source.updateCheckFailed === undefined || typeof source.updateCheckFailed === "boolean") &&
+    (source.lastCheckFailed === undefined || typeof source.lastCheckFailed === "boolean") &&
+    (source.failedCheck === undefined || typeof source.failedCheck === "boolean") &&
+    (source.intelOnly === undefined || typeof source.intelOnly === "boolean") &&
+    (source.intel_only === undefined || typeof source.intel_only === "boolean") &&
+    (source.isIntelOnly === undefined || typeof source.isIntelOnly === "boolean") &&
+    (source.intelCompatible === undefined || typeof source.intelCompatible === "boolean") &&
+    (source.providesIntelBinaries === undefined || typeof source.providesIntelBinaries === "boolean") &&
+    (source.intel_compatible === undefined || typeof source.intel_compatible === "boolean") &&
+    (source.recent === undefined || typeof source.recent === "boolean") &&
+    (source.isRecent === undefined || typeof source.isRecent === "boolean") &&
+    (source.recentlyAdded === undefined || typeof source.recentlyAdded === "boolean") &&
+    (source.recentlyUpdated === undefined || typeof source.recentlyUpdated === "boolean") &&
+    (source.isRecentlyAdded === undefined || typeof source.isRecentlyAdded === "boolean") &&
+    (source.isRecentlyUpdated === undefined || typeof source.isRecentlyUpdated === "boolean") &&
+    (source.addedAt === undefined || typeof source.addedAt === "string") &&
+    (source.createdAt === undefined || typeof source.createdAt === "string") &&
+    (source.added === undefined || typeof source.added === "string") &&
+    (source.updatedAt === undefined || typeof source.updatedAt === "string") &&
+    (source.lastUpdatedAt === undefined || typeof source.lastUpdatedAt === "string") &&
+    (source.lastUpdated === undefined || typeof source.lastUpdated === "string") &&
+    (source.discontinuedAt === undefined || typeof source.discontinuedAt === "string") &&
+    (source.archivedAt === undefined || typeof source.archivedAt === "string")
   );
 }
