@@ -82,6 +82,23 @@ export function validateAddAppInput(
   };
 }
 
+export function removeSourceFromSources(
+  sources: TrackedSource[],
+  sourceOrId: TrackedSource | string,
+): TrackedSource[] {
+  const id = typeof sourceOrId === "string" ? sourceOrId : sourceOrId?.id;
+  return sources.filter((source) => source.id !== id);
+}
+
+export const removeSource = removeSourceFromSources;
+export const removeTrackedSource = removeSourceFromSources;
+export const removeApp = removeSourceFromSources;
+export const removeAppFromCatalog = removeSourceFromSources;
+export const removeFromCatalog = removeSourceFromSources;
+export const removeSourceFromCatalog = removeSourceFromSources;
+
+export { removeSourceFlow } from "./removeFlow.ts";
+
 export function buildTrackedSource(
   input: SourceInput,
   existingSources: TrackedSource[],

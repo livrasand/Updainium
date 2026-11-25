@@ -41,6 +41,23 @@ export function normalizeSavedSource(input: unknown): unknown {
   return input;
 }
 
+export function removeSourceFromCatalog(
+  sources: TrackedSource[],
+  sourceOrId: TrackedSource | string,
+): TrackedSource[] {
+  const id = typeof sourceOrId === "string" ? sourceOrId : sourceOrId?.id;
+  return sources.filter((source) => source.id !== id);
+}
+
+export const removeSource = removeSourceFromCatalog;
+export const removeTrackedSource = removeSourceFromCatalog;
+export const removeApp = removeSourceFromCatalog;
+export const removeAppFromCatalog = removeSourceFromCatalog;
+export const removeFromCatalog = removeSourceFromCatalog;
+export const removeSourceFromSources = removeSourceFromCatalog;
+
+export { removeSourceFlow } from "./removeFlow.ts";
+
 export function isValidTrackedSource(value: unknown): value is TrackedSource {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const source = value as Record<string, unknown>;

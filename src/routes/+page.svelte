@@ -4,7 +4,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { open as openFileDialog, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
+  import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
   import { openPath, openUrl } from "@tauri-apps/plugin-opener";
   import { marked } from "marked";
   import DOMPurify from "dompurify";
@@ -17,6 +17,7 @@
   import { showSnackbar } from "#lib/snackbar.svelte";
   import Button from "@smui/button";
   import Card from "@smui/card";
+  import Dialog, { Title as DialogTitle, Content as DialogContent, Actions as DialogActions } from "@smui/dialog";
 
   type Architecture = "auto" | "x86_64" | "aarch64" | "x86" | "arm";
   type DownloadPhase = "closing" | "downloading" | "verifying" | "opening";
@@ -96,6 +97,29 @@
   let selectionMode = $state(false);
   let selectedAppIds = $state<Set<string>>(new Set());
   let showActionsSheet = $state(false);
+
+  // In-app confirmation dialog (Material Design) for destructive catalog actions.
+  let removeConfirmOpen = $state(false);
+  let removeConfirmTitle = $state("Confirm");
+  let removeConfirmMessage = $state("");
+  let removeConfirmActionLabel = $state("Remove");
+  let removeConfirmResolver = $state<((value: boolean) => void) | null>(null);
+
+  function requestConfirm(message: string, options?: { title?: string; actionLabel?: string }): Promise<boolean> {
+    removeConfirmTitle = options?.title ?? "Confirm";
+    removeConfirmMessage = message;
+    removeConfirmActionLabel = options?.actionLabel ?? "Remove";
+    return new Promise<boolean>((resolve) => {
+      removeConfirmResolver = resolve;
+      removeConfirmOpen = true;
+    });
+  }
+
+  function resolveConfirm(result: boolean): void {
+    removeConfirmOpen = false;
+    removeConfirmResolver?.(result);
+    removeConfirmResolver = null;
+  }
 
   // Categories/tags for apps (stored in source metadata)
   let appCategories = $state<Record<string, string[]>>({});
@@ -1074,7 +1098,7 @@
   async function uninstallApp(source: TrackedSource): Promise<void> {
     if (!canUninstall(source) || !source.appIdentifier) return;
     const appName = source.repo.split("/").at(-1) ?? source.repo;
-    if (!(await confirmDialog(`Uninstall ${appName} from this device?`))) return;
+    if (!(await requestConfirm(`Uninstall ${appName} from this device?`, { title: "Uninstall app", actionLabel: "Uninstall" }))) return;
     uninstalling = source.id;
     sources = sources.map((item) => (item.id === source.id ? { ...item, error: "" } : item));
     try {
@@ -1202,10 +1226,24 @@
   }
 
   async function removeSource(source: TrackedSource): Promise<boolean> {
-    if (!(await confirmDialog(`Remove ${source.repo} from your catalog?`))) return false;
+    if (!(await requestConfirm(`Remove ${source.repo} from your catalog?`))) return false;
     deleteResumeSession(source.id);
     sources = sources.filter((item) => item.id !== source.id);
-    persistSources();
+    // Keep dependent UI state in sync so a removed app does not linger in
+    // selections, pinned apps, or category filters.
+    const nextSelection = new Set(selectedAppIds);
+    nextSelection.delete(source.id);
+    selectedAppIds = nextSelection;
+    selectionMode = nextSelection.size > 0;
+    const wasPinned = appPinned.has(source.id);
+    const nextPinned = new Set(appPinned);
+    nextPinned.delete(source.id);
+    appPinned = nextPinned;
+    if (wasPinned) savePinned();
+    const { [source.id]: _removedCategories, ...nextCategories } = appCategories;
+    appCategories = nextCategories;
+    if (selectedSourceId === source.id) selectedSourceId = null;
+    await persistSources();
     return true;
   }
 
@@ -1280,7 +1318,7 @@
   // Batch actions
   async function batchDelete(): Promise<void> {
     if (selectedAppIds.size === 0) return;
-    if (!confirm(`Delete ${selectedAppIds.size} selected app(s)?`)) return;
+    if (!(await requestConfirm(`Delete ${selectedAppIds.size} selected app(s)?`))) return;
     for (const id of selectedAppIds) {
       const source = sources.find((s) => s.id === id);
       if (source) await removeSource(source);
@@ -1987,6 +2025,15 @@
     </section>
   {/if}
 
+  <Dialog bind:open={removeConfirmOpen} onSMUIDialogClosed={() => resolveConfirm(false)} aria-labelledby="remove-confirm-title" aria-describedby="remove-confirm-content">
+    <DialogTitle id="remove-confirm-title">{removeConfirmTitle}</DialogTitle>
+    <DialogContent id="remove-confirm-content">{removeConfirmMessage}</DialogContent>
+    <DialogActions>
+      <Button onclick={() => resolveConfirm(false)} variant="unelevated">Cancel</Button>
+      <Button onclick={() => resolveConfirm(true)} variant="unelevated" class="destructive-button">{removeConfirmActionLabel}</Button>
+    </DialogActions>
+  </Dialog>
+
 </div>
 
 <style>
@@ -2063,6 +2110,132 @@
   :global(.primary-button:active) { transform: translateY(1px); }
   :global(.primary-button svg) { width: 16px; height: 16px; }
   :global(.primary-button:disabled) { opacity: .64; cursor: wait; }
+  /* Dialog (Material Design) */
+  :global(.mdc-dialog),
+  :global(.mdc-dialog__scrim) {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  :global(.mdc-dialog) {
+    display: none;
+    z-index: 200;
+  }
+  :global(.mdc-dialog--open),
+  :global(.mdc-dialog--opening),
+  :global(.mdc-dialog--closing) { display: flex; }
+  :global(.mdc-dialog__scrim) {
+    background: rgba(0, 0, 0, 0.32);
+    backdrop-filter: blur(2px);
+    opacity: 0;
+    z-index: -1;
+    transition: opacity 150ms linear;
+  }
+  :global(.mdc-dialog--open .mdc-dialog__scrim) { opacity: 1; }
+  :global(.mdc-dialog__container) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 200;
+    transition: opacity 75ms linear, transform 150ms 0ms cubic-bezier(0, 0, 0.2, 1);
+  }
+  :global(.mdc-dialog--open .mdc-dialog__container) { opacity: 1; pointer-events: auto; }
+  :global(.mdc-dialog__surface) {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    min-width: 280px;
+    max-width: 560px;
+    max-height: calc(100% - 32px);
+    padding: 0;
+    border-radius: 12px;
+    background: var(--surface-raised, #fffaff);
+    overflow-y: auto;
+    pointer-events: auto;
+    outline: 0;
+    transform: scale(0.96);
+    box-shadow: 0 24px 38px 3px rgba(0, 0, 0, 0.14), 0 11px 15px -7px rgba(0, 0, 0, 0.2), 0 9px 46px 8px rgba(0, 0, 0, 0.12);
+    transition: transform 150ms 0ms cubic-bezier(0, 0, 0.2, 1);
+  }
+  :global(.mdc-dialog--open .mdc-dialog__surface) { transform: none; }
+  @media (max-width: 592px) {
+    :global(.mdc-dialog__surface) { max-width: calc(100vw - 32px); }
+  }
+  :global(.mdc-dialog__title) {
+    margin: 0;
+    padding: 24px 24px 0;
+    color: var(--text, #24212a);
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.0125em;
+  }
+  :global(.mdc-dialog__content) {
+    padding: 16px 24px 24px;
+    color: var(--muted, #56515d);
+    font-size: 14px;
+    line-height: 1.5;
+    overflow: auto;
+  }
+  :global(.mdc-dialog__actions) {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 24px 20px;
+    border-top: 1px solid var(--border, #e9e0ec);
+  }
+  :global(.mdc-dialog__button) {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 36px;
+    min-width: 80px;
+    padding: 0 18px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text, #24212a);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: normal;
+    text-transform: none;
+    cursor: pointer;
+    transition: background 0.16s ease, color 0.16s ease, transform 0.1s ease;
+  }
+  :global(.mdc-dialog__button):hover {
+    background: var(--surface-muted, #eee7f0);
+  }
+  :global(.mdc-dialog__button):active {
+    transform: scale(0.98);
+  }
+  :global(.mdc-dialog__button):focus-visible {
+    outline: 2px solid var(--accent, #705394);
+    outline-offset: 2px;
+  }
+  :global(.mdc-dialog__button.destructive-button),
+  .destructive-button {
+    color: var(--accent-strong, #b00020);
+    font-weight: 600;
+  }
+  :global(.mdc-dialog__button.destructive-button):hover,
+  .destructive-button:hover {
+    background: color-mix(in srgb, var(--accent-strong, #b00020) 8%, transparent);
+    color: var(--accent-strong, #b00020);
+  }
+  :global(.mdc-dialog__button.destructive-button):focus-visible,
+  .destructive-button:focus-visible {
+    outline: 2px solid var(--accent-strong, #b00020);
+    outline-offset: 2px;
+  }
   .summary-row { display: grid; grid-template-columns: 1fr 1fr 1.25fr; gap: 13px; margin-top: 30px; }
   .summary-card { display: flex; min-height: 81px; align-items: center; gap: 12px; padding: 14px 15px; border: 1px solid #eeedf3; border-radius: 9px; background: #fff; }
   .summary-icon { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; border-radius: 9px; }
