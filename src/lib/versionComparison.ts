@@ -60,3 +60,16 @@ export function isInstalledVersionCurrent(
 ): boolean {
   return Boolean(installedVersion?.trim()) && versionsEqual(installedVersion, latestVersion);
 }
+
+export function isMajorVersionChange(
+  installedVersion: string | null | undefined,
+  latestVersion: string | null | undefined,
+): boolean {
+  const installedParts = extractVersionNumbers(installedVersion ?? "");
+  const latestParts = extractVersionNumbers(latestVersion ?? "");
+  if (!installedParts || !latestParts) return false;
+  return (latestParts[0] ?? 0) > (installedParts[0] ?? 0);
+}
+
+export const isMajorUpdate = isMajorVersionChange;
+export const hasMajorVersionChange = isMajorVersionChange;

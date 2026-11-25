@@ -58,6 +58,22 @@ export const removeSourceFromSources = removeSourceFromCatalog;
 
 export { removeSourceFlow } from "./removeFlow.ts";
 
+export function isVerifiedSource(source: { verificationStatus?: string; hashVerified?: boolean } | null | undefined): boolean {
+  if (!source) return false;
+  return source.verificationStatus === "verified" || source.hashVerified === true;
+}
+
+export function isMajorVersionChange(
+  installedVersion: string | null | undefined,
+  latestVersion: string | null | undefined,
+): boolean {
+  const toParts = (value: string | null | undefined) => value?.match(/\d+/g)?.map(Number) ?? [];
+  const installed = toParts(installedVersion);
+  const latest = toParts(latestVersion);
+  if (!installed.length || !latest.length) return false;
+  return (latest[0] ?? 0) > (installed[0] ?? 0);
+}
+
 export function isValidTrackedSource(value: unknown): value is TrackedSource {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const source = value as Record<string, unknown>;

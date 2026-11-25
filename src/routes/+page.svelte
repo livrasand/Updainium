@@ -16,6 +16,7 @@
   import { getSettings, getSetting, loadSettings, setSetting, updateSettings } from "#lib/settings.svelte";
   import { showSnackbar } from "#lib/snackbar.svelte";
   import { createDownloadManager } from "#lib/downloadFlow";
+import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
   import Button from "@smui/button";
   import Card from "@smui/card";
   import Dialog, { Title as DialogTitle, Content as DialogContent, Actions as DialogActions } from "@smui/dialog";
@@ -74,6 +75,8 @@
   let appFileDragOver = $state(false);
   let checking = $state<string[]>([]);
   let downloading = $state<string | null>(null);
+  let updateAllInProgress = $state(false);
+  let updateAllProgress = $state<any>(null);
   let verifying = $state<string | null>(null);
   let uninstalling = $state<string | null>(null);
   let downloadProgress = $state<DownloadProgressEvent | null>(null);
@@ -93,6 +96,7 @@
     deleteResumeSession,
   });
   let installedVersions = $state<Record<string, string | null | undefined>>({});
+  const eligibleUpdateCount = $derived(getEligibleUpdates(sources, installedVersions).length);
   let installedCheckErrors = $state<string[]>([]);
   let installedVersionEditorOpenFor = $state<string | null>(null);
   let installedVersionDraft = $state("");
@@ -179,7 +183,7 @@
         const bPinned = appPinned.has(b.id);
         if (aPinned && !bPinned) return -1;
         if (!aPinned && bPinned) return 1;
-        
+
         // Sort by update status (updates first)
         const aHasUpdate = hasUpdate(a);
         const bHasUpdate = hasUpdate(b);
@@ -187,28 +191,28 @@
           if (aHasUpdate && !bHasUpdate) return sortDirection === "asc" ? -1 : 1;
           if (!aHasUpdate && bHasUpdate) return sortDirection === "asc" ? 1 : -1;
         }
-        
+
         // Sort by last updated
         if (sortBy === "lastUpdated") {
           const aDate = a.releaseDate ? new Date(a.releaseDate).getTime() : 0;
           const bDate = b.releaseDate ? new Date(b.releaseDate).getTime() : 0;
           if (aDate !== bDate) return sortDirection === "asc" ? aDate - bDate : bDate - aDate;
         }
-        
+
         // Sort by name
         if (sortBy === "name") {
           const aName = a.repo.split("/").at(-1) ?? a.repo;
           const bName = b.repo.split("/").at(-1) ?? b.repo;
           return sortDirection === "asc" ? aName.localeCompare(bName) : bName.localeCompare(aName);
         }
-        
+
         // Sort by author
         if (sortBy === "author") {
           const aAuthor = a.repo.split("/").slice(0, -1).join("/");
           const bAuthor = b.repo.split("/").slice(0, -1).join("/");
           if (aAuthor !== bAuthor) return sortDirection === "asc" ? aAuthor.localeCompare(bAuthor) : bAuthor.localeCompare(aAuthor);
         }
-        
+
         // Sort by pinned (already handled above, but fallback)
         return a.repo.localeCompare(b.repo);
       }),
@@ -445,7 +449,7 @@
     };
   });
 
-   
+
 
   onMount(() => {
     const disposers = [
@@ -921,6 +925,40 @@
     ]);
     const updatesAvailable = sources.some((source) => hasUpdate(source));
     showSnackbar(updatesAvailable ? "Updates available" : "All your apps are up to date");
+  }
+
+  async function updateAllApps(): Promise<void> {
+    if (updateAllInProgress || anyOperationInFlight()) return;
+    updateAllInProgress = true;
+    downloading = "__update_all__";
+    updateAllProgress = null;
+    try {
+      const manager = createUpdateAllManager({
+        invoke,
+        openPath,
+        installedVersions,
+        saveResumeSession: (source, session) => saveResumeSession(source, session as ResumeSession),
+        deleteResumeSession,
+        confirmMajor: async (majors: any[]) => {
+          const list = majors.map((item) => `${item.appName}: ${item.from} → ${item.to}`).join("\\n");
+          return requestConfirm(`Update these major versions?\\n${list}`, {
+            title: "Major updates",
+            actionLabel: "Update all",
+          });
+        },
+        onProgress: (progress: any) => {
+          updateAllProgress = progress;
+        },
+      });
+      const result = await manager.run(sources);
+      showSnackbar(result.summary, 8000, result.failed > 0 ? "error" : "info");
+    } catch (error) {
+      showSnackbar(`Could not update all apps: ${messageOf(error)}`, 6000, "error");
+    } finally {
+      updateAllInProgress = false;
+      downloading = null;
+      updateAllProgress = null;
+    }
   }
 
   async function copySourceError(error: string): Promise<void> {
@@ -1806,6 +1844,11 @@
           <h1>Apps</h1>
         </div>
         <div class="heading-actions">
+          {#if eligibleUpdateCount > 0 || updateAllInProgress}
+            <Button class="primary-button" variant="unelevated" type="button" onclick={updateAllApps} disabled={updateAllInProgress || checking.length > 0 || !sources.length}>
+              {updateAllInProgress ? "Updating all…" : `Update all (${eligibleUpdateCount})`}
+            </Button>
+          {/if}
           <Button
             class="icon-button refresh-button"
             variant="text"
@@ -2429,7 +2472,7 @@
   .back-link:hover { background: var(--surface-muted, #eee7f0); }
   .app-detail { width: 100%; animation: section-enter .2s ease-out both; }
   .detail-identity { display: flex; min-height: 118px; align-items: center; gap: 17px; padding: 20px 23px; border-radius: 23px; background: var(--surface, #f7f0f8); }
-  .detail-avatar { position: relative; display: grid; width: 68px; height: 68px; flex: 0 0 auto; place-items: center; border-radius: 21px; background: var(--surface-raised, #fffaff); color: var(--accent, #705394); font-size: 27px; }
+  .detail-avatar { position: relative; display: grid; width: 68px; height: 68px; flex: 0 0 auto; place-items: center; border-radius: 21px; color: var(--accent, #705394); font-size: 27px; }
   .detail-name { min-width: 0; }
   .detail-name h1 { overflow: hidden; margin: 0 0 5px; color: var(--text, #24212a); font-size: 24px; font-weight: 450; letter-spacing: -.35px; text-overflow: ellipsis; white-space: nowrap; }
   .detail-name span { color: var(--muted, #56515d); font-size: 14px; }
@@ -2905,7 +2948,7 @@
     line-height: 1.2;
     white-space: nowrap;
   }
-  
+
   /* Bottom sheets */
   .bottom-sheet-overlay {
     position: fixed;
@@ -3119,7 +3162,7 @@
   .action-item.destructive svg {
     color: #b84b48;
   }
-  
+
   @keyframes fade-in {
     from { opacity: 0; }
     to { opacity: 1; }
