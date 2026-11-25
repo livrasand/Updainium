@@ -1490,75 +1490,328 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
     return appCategories[sourceId]?.includes(category) ?? false;
   }
 
+  // Batch operation result types
+  type BatchOperationResult = {
+    sourceId: string;
+    ok: boolean;
+    error?: string;
+    skipped?: boolean;
+    skipReason?: string;
+  };
+
+  type BatchOperationSummary = {
+    total: number;
+    completed: number;
+    failed: number;
+    skipped: number;
+    results: BatchOperationResult[];
+    summary: string;
+  };
+
+  // Helper: run a batch operation with progress tracking, failure isolation, and skip support
+  async function runBatchOperation(
+    name: string,
+    ids: Set<string>,
+    operation: (id: string) => Promise<BatchOperationResult>,
+    onProgress?: (progress: { completed: number; total: number; status: "completed" | "failed" | "skipped" }) => void,
+  ): Promise<BatchOperationSummary> {
+    const results: BatchOperationResult[] = [];
+    let completed = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    const idArray = Array.from(ids);
+    for (let i = 0; i < idArray.length; i++) {
+      const id = idArray[i];
+      let result: BatchOperationResult;
+      try {
+        result = await operation(id);
+      } catch (error: unknown) {
+        result = {
+          sourceId: id,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          skipped: false,
+        };
+      }
+      results.push(result);
+      if (result.skipped) {
+        skipped++;
+      } else if (!result.ok) {
+        failed++;
+      } else {
+        completed++;
+      }
+      onProgress?.({
+        completed: i + 1,
+        total: idArray.length,
+        status: result.skipped ? "skipped" : result.ok ? "completed" : "failed",
+      });
+    }
+
+    const totalFailed = results.filter((r) => !r.ok && !r.skipped).length;
+    const totalSkipped = results.filter((r) => r.skipped).length;
+    const totalCompleted = results.filter((r) => r.ok && !r.skipped).length;
+
+    const itemWord = idArray.length === 1 ? "app" : "apps";
+    const summary = `${totalCompleted} completed, ${totalFailed} failed, ${totalSkipped} skipped of ${idArray.length} ${itemWord}`;
+
+    return {
+      total: idArray.length,
+      completed: totalCompleted,
+      failed: totalFailed,
+      skipped: totalSkipped,
+      results,
+      summary,
+    };
+  }
+
   // Batch actions
   async function batchDelete(): Promise<void> {
     if (selectedAppIds.size === 0) return;
     if (!(await requestConfirm(`Delete ${selectedAppIds.size} selected app(s)?`))) return;
-    for (const id of selectedAppIds) {
-      const source = sources.find((s) => s.id === id);
-      if (source) await removeSource(source);
-    }
+
+    const summary = await runBatchOperation(
+      "delete",
+      selectedAppIds,
+      async (id: string): Promise<BatchOperationResult> => {
+        const source = sources.find((s) => s.id === id);
+        if (!source) {
+          return { sourceId: id, ok: false, skipped: true, skipReason: "App not found in catalog" };
+        }
+        try {
+          await removeSource(source);
+          return { sourceId: id, ok: true };
+        } catch (error: unknown) {
+          return {
+            sourceId: id,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+      () => {}, // no real-time progress for delete
+    );
+
+    showSnackbar(summary.summary, 6000, summary.failed > 0 ? "error" : "info");
     clearSelection();
     showActionsSheet = false;
   }
 
   async function batchCheckRelease(): Promise<void> {
     if (selectedAppIds.size === 0) return;
-    for (const id of selectedAppIds) {
-      await checkSource(id);
-    }
+
+    const summary = await runBatchOperation(
+      "check for updates",
+      selectedAppIds,
+      async (id: string): Promise<BatchOperationResult> => {
+        const source = sources.find((s) => s.id === id);
+        if (!source) {
+          return { sourceId: id, ok: false, skipped: true, skipReason: "App not found in catalog" };
+        }
+        try {
+          await checkSource(id);
+          return { sourceId: id, ok: true };
+        } catch (error: unknown) {
+          return {
+            sourceId: id,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+            skipped: true,
+            skipReason: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+      (progress) => showSnackbar(
+        `${progress.completed}/${progress.total} ${progress.status}`,
+        3000,
+        progress.status === "failed" ? "error" : "info",
+      ),
+    );
+
+    showSnackbar(summary.summary, 6000, "info");
     clearSelection();
     showActionsSheet = false;
   }
 
   async function batchInstallOrUpdate(): Promise<void> {
     if (selectedAppIds.size === 0) return;
-    for (const id of selectedAppIds) {
-      const source = sources.find((s) => s.id === id);
-      if (source && canInstallOrUpdate(source)) {
-        await runPrimaryAction(source);
-      }
-    }
+
+    const summary = await runBatchOperation(
+      "install or update",
+      selectedAppIds,
+      async (id: string): Promise<BatchOperationResult> => {
+        const source = sources.find((s) => s.id === id);
+        if (!source) {
+          return { sourceId: id, ok: false, skipped: true, skipReason: "App not found in catalog" };
+        }
+        if (!canInstallOrUpdate(source)) {
+          return {
+            sourceId: id,
+            ok: false,
+            skipped: true,
+            skipReason: "Not installable or up to date",
+          };
+        }
+        try {
+          await runPrimaryAction(source);
+          return { sourceId: id, ok: true };
+        } catch (error: unknown) {
+          return {
+            sourceId: id,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+      (progress) => showSnackbar(
+        `${progress.completed}/${progress.total} ${progress.status}`,
+        3000,
+        progress.status === "failed" ? "error" : "info",
+      ),
+    );
+
+    showSnackbar(summary.summary, 6000, "info");
     clearSelection();
     showActionsSheet = false;
   }
 
   async function batchPin(): Promise<void> {
     if (selectedAppIds.size === 0) return;
-    for (const id of selectedAppIds) {
-      if (!appPinned.has(id)) togglePin(id);
-    }
-    savePinned();
+
+    const summary = await runBatchOperation(
+      "pin",
+      selectedAppIds,
+      async (id: string): Promise<BatchOperationResult> => {
+        if (appPinned.has(id)) {
+          return { sourceId: id, ok: true, skipped: true, skipReason: "Already pinned" };
+        }
+        try {
+          togglePin(id);
+          savePinned();
+          return { sourceId: id, ok: true };
+        } catch (error: unknown) {
+          return {
+            sourceId: id,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+      (progress) => showSnackbar(
+        `${progress.completed}/${progress.total} ${progress.status}`,
+        3000,
+        progress.status === "failed" ? "error" : "info",
+      ),
+    );
+
+    showSnackbar(summary.summary, 6000, "info");
     clearSelection();
     showActionsSheet = false;
   }
 
   async function batchUnpin(): Promise<void> {
     if (selectedAppIds.size === 0) return;
-    for (const id of selectedAppIds) {
-      if (appPinned.has(id)) togglePin(id);
-    }
-    savePinned();
+
+    const summary = await runBatchOperation(
+      "unpin",
+      selectedAppIds,
+      async (id: string): Promise<BatchOperationResult> => {
+        if (!appPinned.has(id)) {
+          return { sourceId: id, ok: true, skipped: true, skipReason: "Not pinned" };
+        }
+        try {
+          togglePin(id);
+          savePinned();
+          return { sourceId: id, ok: true };
+        } catch (error: unknown) {
+          return {
+            sourceId: id,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+      (progress) => showSnackbar(
+        `${progress.completed}/${progress.total} ${progress.status}`,
+        3000,
+        progress.status === "failed" ? "error" : "info",
+      ),
+    );
+
+    showSnackbar(summary.summary, 6000, "info");
     clearSelection();
     showActionsSheet = false;
   }
 
   async function batchFavorite(): Promise<void> {
     if (selectedAppIds.size === 0) return;
-    const next = new Set(favoriteIds);
-    for (const id of selectedAppIds) next.add(id);
-    favoriteIds = next;
-    saveFavorites();
+
+    const summary = await runBatchOperation(
+      "favorite",
+      selectedAppIds,
+      async (id: string): Promise<BatchOperationResult> => {
+        const next = new Set(favoriteIds);
+        if (next.has(id)) {
+          return { sourceId: id, ok: true, skipped: true, skipReason: "Already favorited" };
+        }
+        next.add(id);
+        favoriteIds = next;
+        try {
+          saveFavorites();
+          return { sourceId: id, ok: true };
+        } catch (error: unknown) {
+          return {
+            sourceId: id,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+      (progress) => showSnackbar(
+        `${progress.completed}/${progress.total} ${progress.status}`,
+        3000,
+        progress.status === "failed" ? "error" : "info",
+      ),
+    );
+
+    showSnackbar(summary.summary, 6000, "info");
     clearSelection();
     showActionsSheet = false;
   }
 
   async function batchUnfavorite(): Promise<void> {
     if (selectedAppIds.size === 0) return;
-    const next = new Set(favoriteIds);
-    for (const id of selectedAppIds) next.delete(id);
-    favoriteIds = next;
-    saveFavorites();
+
+    const summary = await runBatchOperation(
+      "unfavorite",
+      selectedAppIds,
+      async (id: string): Promise<BatchOperationResult> => {
+        const next = new Set(favoriteIds);
+        if (!next.has(id)) {
+          return { sourceId: id, ok: true, skipped: true, skipReason: "Not favorited" };
+        }
+        next.delete(id);
+        favoriteIds = next;
+        try {
+          saveFavorites();
+          return { sourceId: id, ok: true };
+        } catch (error: unknown) {
+          return {
+            sourceId: id,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+      (progress) => showSnackbar(
+        `${progress.completed}/${progress.total} ${progress.status}`,
+        3000,
+        progress.status === "failed" ? "error" : "info",
+      ),
+    );
+
+    showSnackbar(summary.summary, 6000, "info");
     clearSelection();
     showActionsSheet = false;
   }
@@ -2342,11 +2595,11 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
             <span>Unpin</span>
           </button>
           <button class="action-item" type="button" onclick={batchFavorite}>
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M12,17.27L18.18,21l-1.64-7.03L22,9.24l-7.19-0.61L12,2L9.19,8.63L2,9.24l5.46,4.73L5.82,21Z"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M11,11.48ZM11,21L7.83,18.15q-1.8-1.63-3.09-2.9t-2.12-2.4T1.39,10.68Q1,9.63 1,8.48Q1,6.13 2.58,4.56T6.5,3Q7.8,3 8.98,3.55T11,5.1q0.85-1 2.03-1.55T15.5,3q2.03,0 3.4,1.14T20.78,7q0,0-0.34,0T19.71,7T18.99,7T18.65,7Q18.2,6 17.33,5.5T15.5,5q-1.27,0-2.2,0.69T11.58,7.5H10.43Q9.65,6.38 8.66,5.69Q7.68,5 6.5,5Q5.08,5 4.04,5.99Q3,6.97 3,8.48Q3,9.3 3.35,10.15T4.6,12.11q0.9,1.11 2.45,2.6T11,18.3q0.65-0.57 1.53-1.32t1.4-1.32t1.4-1.25q0,0 0.22,0.22q0.22,0.23 0.49,0.49t0.49,0.49t0.23,0.22q-0.55,0.5-1.4,1.24t-1.5,1.31L11,21Zm7-4V14H15V12h3V9h2v3h3v2H20v3H18Z"/></svg>
             <span>Mark favorite</span>
           </button>
           <button class="action-item" type="button" onclick={batchUnfavorite}>
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M22,9.24l-7.19-0.62L12,2L9.19,8.63L2,9.24l5.46,4.73L5.82,21L12,17.27L18.18,21l-1.63-7.03L22,9.24ZM12,15.4l-3.76,2.27l1-4.28l-3.32-2.88l4.38-0.37L12,6.1l1.71,4.04l4.38,0.37l-3.32,2.88l1,4.28L12,15.4Z"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M11,11.48ZM11,21L7.83,18.15q-1.8-1.63-3.09-2.9t-2.12-2.4T1.39,10.68Q1,9.63 1,8.48Q1,6.13 2.58,4.56T6.5,3Q7.8,3 8.98,3.55T11,5.1q0.85-1 2.03-1.55T15.5,3q2.1,0 3.83,1.47t1.72,4q0,0.35-0.05,0.74T20.85,10q0,0-0.34,0t-0.73,0t-0.73,0q-0.34,0-0.34,0q0.13-0.45 0.2-0.85T19,8.4q0-1.88-1.25-2.64T15.5,5q-1.27,0-2.2,0.69T11.58,7.5H10.43Q9.65,6.38 8.66,5.69Q7.68,5 6.5,5Q5.08,5 4.04,5.99Q3,6.97 3,8.48Q3,6.97 3,8.48Q3,9.3 3.35,10.15T4.6,12.11q0.9,1.11 2.45,2.6T11,18.3q0.65-0.57 1.53-1.32t1.4-1.32t1.4-1.25q0,0 0.22,0.22q0.22,0.23 0.49,0.49t0.49,0.49t0.23,0.22q-0.55,0.5-1.4,1.24t-1.5,1.31L11,21Zm4-7V12h8v2H15Z"/></svg>
             <span>Remove favorite</span>
           </button>
 
