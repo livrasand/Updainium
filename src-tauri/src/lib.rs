@@ -1,6 +1,14 @@
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-use std::{fs, io::{Read, Write}, process::Command};
+use std::{
+    collections::HashMap,
+    fs,
+    io::{Read, Write},
+    process::Command,
+    sync::atomic::{AtomicBool, Ordering},
+    sync::Arc,
+    time::Duration,
+};
 mod backup;
 mod github;
 mod process;
@@ -16,6 +24,7 @@ use tauri::{
 };
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_deep_link::DeepLinkExt;
+use tokio::sync::Mutex;
 
 #[derive(serde::Serialize)]
 struct Platform {
@@ -37,6 +46,25 @@ struct DownloadProgress {
     phase: &'static str,
     received: u64,
     total: Option<u64>,
+}
+
+#[derive(Clone)]
+struct DownloadControl {
+    cancelled: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct DownloadsState {
+    downloads: Mutex<HashMap<String, DownloadControl>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DownloadMeta {
+    etag: Option<String>,
+    last_modified: Option<String>,
+    received: u64,
 }
 
 fn emit_download_progress(
@@ -194,11 +222,16 @@ pub fn run() {
             get_installed_app_version,
             uninstall_app,
             download_release_asset,
+            download_release_asset_resilient,
+            cancel_download,
+            pause_download,
+            resume_download,
             hash_file,
             fetch_release_metadata,
             fetch_repository_icon,
             open_in_editor
         ])
+        .manage(DownloadsState::default())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -1210,6 +1243,333 @@ async fn download_release_asset(
         sha256,
         verified: expected_sha256.is_some(),
     })
+}
+
+fn backoff_delay(attempt: u32) -> Duration {
+    let delay_ms = (2u64.pow(attempt.min(6)) * 500).min(30_000);
+    Duration::from_millis(delay_ms)
+}
+
+fn meta_path_for(directory: &std::path::Path, safe_name: &str) -> std::path::PathBuf {
+    directory.join(format!("{safe_name}.meta"))
+}
+
+fn load_download_meta(directory: &std::path::Path, safe_name: &str) -> Option<DownloadMeta> {
+    let path = meta_path_for(directory, safe_name);
+    let content = fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn save_download_meta(
+    directory: &std::path::Path,
+    safe_name: &str,
+    meta: &DownloadMeta,
+) -> Result<(), String> {
+    let path = meta_path_for(directory, safe_name);
+    let content = serde_json::to_string(meta).map_err(|error| error.to_string())?;
+    fs::write(&path, content).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn cancel_download(
+    app: tauri::AppHandle,
+    download_id: String,
+) -> Result<(), String> {
+    let state = app.state::<DownloadsState>();
+    let downloads = state.downloads.lock().await;
+    if let Some(control) = downloads.get(&download_id) {
+        control.cancelled.store(true, Ordering::SeqCst);
+        control.paused.store(false, Ordering::SeqCst);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn pause_download(
+    app: tauri::AppHandle,
+    download_id: String,
+) -> Result<(), String> {
+    let state = app.state::<DownloadsState>();
+    let downloads = state.downloads.lock().await;
+    if let Some(control) = downloads.get(&download_id) {
+        control.paused.store(true, Ordering::SeqCst);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn resume_download(
+    app: tauri::AppHandle,
+    download_id: String,
+) -> Result<(), String> {
+    let state = app.state::<DownloadsState>();
+    let downloads = state.downloads.lock().await;
+    if let Some(control) = downloads.get(&download_id) {
+        control.paused.store(false, Ordering::SeqCst);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn download_release_asset_resilient(
+    app: tauri::AppHandle,
+    url: String,
+    file_name: String,
+    expected_sha256: Option<String>,
+    download_id: String,
+    max_retries: Option<u32>,
+) -> Result<DownloadedAsset, String> {
+    let max_retries = max_retries.unwrap_or(5);
+    let parsed_url = parse_https_url(&url, "The download must come from an HTTPS source.")?;
+    let expected_sha256 = normalize_expected_sha256(expected_sha256)?;
+    let safe_name = sanitize_download_file_name(&file_name)?;
+
+    let state = app.state::<DownloadsState>();
+
+    let control = {
+        let mut downloads = state.downloads.lock().await;
+        let new_control = DownloadControl {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            paused: Arc::new(AtomicBool::new(false)),
+        };
+        downloads.insert(download_id.clone(), new_control.clone());
+        new_control
+    };
+
+    let directory = app.path().app_cache_dir().map_err(|error| error.to_string())?;
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::metadata(&directory)
+            .map_err(|error| error.to_string())?
+            .permissions();
+        if perms.mode() & 0o022 != 0 {
+            return Err("Cache directory is group- or world-writable".into());
+        }
+    }
+
+    let destination = directory.join(&safe_name);
+    let temporary = destination.with_extension("download");
+
+    let mut received: u64 = 0;
+    let mut etag: Option<String> = None;
+    let mut last_modified: Option<String> = None;
+
+    if let Some(meta) = load_download_meta(&directory, &safe_name) {
+        if meta.received > 0 && temporary.exists() {
+            received = fs::metadata(&temporary)
+                .map_err(|error| error.to_string())?
+                .len();
+            if received != meta.received {
+                received = received.min(meta.received);
+            }
+        }
+        etag = meta.etag;
+        last_modified = meta.last_modified;
+    } else if temporary.exists() {
+        received = fs::metadata(&temporary).map_err(|error| error.to_string())?.len();
+    }
+
+    let mut attempt = 0;
+
+    loop {
+        if control.cancelled.load(Ordering::SeqCst) {
+            cleanup_partial(&directory, &safe_name);
+            return Err("Download cancelled".into());
+        }
+
+        while control.paused.load(Ordering::SeqCst) {
+            if control.cancelled.load(Ordering::SeqCst) {
+                cleanup_partial(&directory, &safe_name);
+                return Err("Download cancelled".into());
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        attempt += 1;
+
+        let client = https_client()?;
+        let mut request = client
+            .get(parsed_url.clone())
+            .header(reqwest::header::USER_AGENT, "Updainium");
+
+        if received > 0 {
+            request = request.header(
+                reqwest::header::RANGE,
+                format!("bytes={}-", received),
+            );
+            if let Some(etag_val) = &etag {
+                request = request.header(reqwest::header::IF_RANGE, etag_val);
+            } else if let Some(lm) = &last_modified {
+                request = request.header(reqwest::header::IF_RANGE, lm);
+            }
+        }
+
+        let mut response = match request.send().await {
+            Ok(resp) => resp,
+            Err(error) => {
+                if attempt >= max_retries {
+                    return Err(format!(
+                        "Download failed after {max_retries} attempts: {error}"
+                    ));
+                }
+                let delay = backoff_delay(attempt);
+                emit_download_progress(&app, &download_id, "downloading", received, None);
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+        };
+
+        let status = response.status();
+        let total = response.content_length();
+
+        let is_resumable = matches!(
+            status,
+            reqwest::StatusCode::PARTIAL_CONTENT | reqwest::StatusCode::OK
+        );
+
+        if !is_resumable {
+            match status {
+                reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
+                    received = 0;
+                    let _ = fs::File::create(&temporary).map_err(|error| error.to_string())?;
+                    etag = None;
+                    last_modified = None;
+                    let _ = fs::remove_file(&meta_path_for(&directory, &safe_name));
+                    continue;
+                }
+                _ => {
+                    if attempt >= max_retries {
+                        return Err(format!(
+                            "Download failed with status {status} after {max_retries} attempts"
+                        ));
+                    }
+                    let delay = backoff_delay(attempt);
+                    emit_download_progress(&app, &download_id, "downloading", received, total);
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+            }
+        }
+
+        let response_etag = response.headers().get(reqwest::header::ETAG).and_then(|v| v.to_str().ok().map(|s| s.to_owned()));
+        let response_last_modified = response.headers().get(reqwest::header::LAST_MODIFIED).and_then(|v| v.to_str().ok().map(|s| s.to_owned()));
+
+        let mut file: fs::File = if status == reqwest::StatusCode::PARTIAL_CONTENT {
+            fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&temporary)
+                .map_err(|error| error.to_string())?
+        } else {
+            received = 0;
+            fs::File::create(&temporary).map_err(|error| error.to_string())?
+        };
+
+        let start_received = received;
+
+        let mut hasher = Sha256::new();
+        let mut chunk_received: u64 = 0;
+        let mut last_emit = std::time::Instant::now();
+        emit_download_progress(&app, &download_id, "downloading", start_received, total);
+
+        let mut download_cancelled = false;
+        while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+            if control.cancelled.load(Ordering::SeqCst) {
+                download_cancelled = true;
+                break;
+            }
+            while control.paused.load(Ordering::SeqCst) {
+                if control.cancelled.load(Ordering::SeqCst) {
+                    download_cancelled = true;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            if control.cancelled.load(Ordering::SeqCst) {
+                download_cancelled = true;
+                break;
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk).map_err(|error| error.to_string())?;
+            chunk_received += chunk.len() as u64;
+            if last_emit.elapsed() >= Duration::from_millis(100) {
+                emit_download_progress(&app, &download_id, "downloading", start_received + chunk_received, total);
+                last_emit = std::time::Instant::now();
+            }
+        }
+
+        file.sync_all().map_err(|error| error.to_string())?;
+
+        if download_cancelled {
+            cleanup_partial(&directory, &safe_name);
+            return Err("Download cancelled".into());
+        }
+
+        let final_received = start_received + chunk_received;
+
+        // Always hash the complete file on disk to ensure correctness
+        // (resumed downloads only hash new chunks, so re-hash everything).
+        let mut file_hasher = Sha256::new();
+        let mut hash_file = fs::File::open(&temporary).map_err(|error| error.to_string())?;
+        let mut buffer = [0u8; 8192];
+        loop {
+            let read = hash_file.read(&mut buffer).map_err(|error| error.to_string())?;
+            if read == 0 {
+                break;
+            }
+            file_hasher.update(&buffer[..read]);
+        }
+        let sha256 = format!("{:x}", file_hasher.finalize());
+
+        let meta = DownloadMeta {
+            etag: response_etag.clone(),
+            last_modified: response_last_modified.clone(),
+            received: final_received,
+        };
+        save_download_meta(&directory, &safe_name, &meta)?;
+
+        emit_download_progress(&app, &download_id, "verifying", final_received, total);
+
+        if let Some(expected_sha256) = expected_sha256.as_deref() {
+            if sha256 != expected_sha256 {
+                cleanup_partial(&directory, &safe_name);
+                return Err(format!(
+                    "The downloaded file failed SHA-256 verification. Expected {expected_sha256}, got {sha256}."
+                ));
+            }
+        }
+
+        if destination.exists() {
+            fs::remove_file(&destination).map_err(|error| error.to_string())?;
+        }
+        fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
+
+        #[cfg(unix)]
+        if destination.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("appimage")) {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&destination, fs::Permissions::from_mode(0o755))
+                .map_err(|error| error.to_string())?;
+        }
+
+        let path = destination
+            .to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "The local installer path is not valid.".to_owned())?;
+        return Ok(DownloadedAsset {
+            path,
+            sha256,
+            verified: expected_sha256.is_some(),
+        });
+    }
+}
+
+fn cleanup_partial(directory: &std::path::Path, safe_name: &str) {
+    let _ = fs::remove_file(&directory.join(format!("{safe_name}.download")));
+    let _ = fs::remove_file(&meta_path_for(directory, safe_name));
 }
 
 #[tauri::command]

@@ -15,6 +15,7 @@
   import { loadUserPlugins, resolveProvider } from "#lib/registry";
   import { getSettings, getSetting, loadSettings, setSetting, updateSettings } from "#lib/settings.svelte";
   import { showSnackbar } from "#lib/snackbar.svelte";
+  import { createDownloadManager } from "#lib/downloadFlow";
   import Button from "@smui/button";
   import Card from "@smui/card";
   import Dialog, { Title as DialogTitle, Content as DialogContent, Actions as DialogActions } from "@smui/dialog";
@@ -76,6 +77,21 @@
   let verifying = $state<string | null>(null);
   let uninstalling = $state<string | null>(null);
   let downloadProgress = $state<DownloadProgressEvent | null>(null);
+  let downloadPaused = $state(false);
+  const downloadManager = createDownloadManager({
+    invoke,
+    openPath,
+    onProgress: (progress) => {
+      downloadProgress = {
+        downloadId: progress.downloadId,
+        phase: progress.phase as DownloadProgressEvent["phase"],
+        received: progress.received,
+        total: progress.total ?? null,
+      };
+    },
+    saveResumeSession: (source, session) => saveResumeSession(source, session as ResumeSession),
+    deleteResumeSession,
+  });
   let installedVersions = $state<Record<string, string | null | undefined>>({});
   let installedCheckErrors = $state<string[]>([]);
   let installedVersionEditorOpenFor = $state<string | null>(null);
@@ -412,7 +428,24 @@
     };
   });
 
-  
+  onMount(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen("download-progress", (event) => {
+      const progress = event.payload as DownloadProgressEvent;
+      if (progress.downloadId !== downloading) return;
+      downloadProgress = progress;
+    }).then((stopListening) => {
+      if (disposed) stopListening();
+      else unlisten = stopListening;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  });
+
+   
 
   onMount(() => {
     const disposers = [
@@ -1137,81 +1170,64 @@
   async function downloadAndOpen(source: TrackedSource): Promise<void> {
     if (!source.assetUrl || downloading || uninstalling) return;
     downloading = source.id;
-    downloadProgress = { downloadId: source.id, phase: "closing", received: 0, total: null };
-    let unlistenProgress: (() => void) | undefined;
+    downloadPaused = false;
+    downloadProgress = null;
     sources = sources.map((item) =>
       item.id === source.id
-        ? {
-            ...item,
-            error: "",
-            downloadPath: undefined,
-            downloadedSha256: undefined,
-            hashVerified: undefined,
-          }
+        ? { ...item, error: "", downloadPath: undefined, downloadedSha256: undefined, hashVerified: undefined }
         : item,
     );
     try {
-      deleteResumeSession(source.id);
-      const prepared = await prepareUpdateSession(source);
-      if (!prepared.ok) {
-        setSourceError(source.id, prepared.message);
+      const result = await downloadManager.downloadAndOpen(source);
+      if (!result.ok && result.error !== "Download cancelled") {
+        setSourceError(source.id, result.error ?? "Download failed");
         return;
       }
-      if (prepared.session) saveResumeSession(source, prepared.session);
-
-      downloadProgress = {
-        downloadId: source.id,
-        phase: "downloading",
-        received: 0,
-        total: null,
-      };
-      unlistenProgress = await listen<DownloadProgressEvent>("download-progress", (event) => {
-        if (event.payload.downloadId === source.id) downloadProgress = event.payload;
-      });
-      const downloaded = await invoke<{ path: string; sha256: string; verified: boolean }>("download_release_asset", {
-        url: source.assetUrl,
-        fileName: source.assetName,
-        expectedSha256: source.sha256 ?? null,
-        downloadId: source.id,
-      });
-      downloadProgress = {
-        downloadId: source.id,
-        phase: "opening",
-        received: downloadProgress?.received ?? 0,
-        total: downloadProgress?.total ?? null,
-      };
       sources = sources.map((item) =>
         item.id === source.id
           ? {
               ...item,
-              downloadPath: downloaded.path,
-              downloadedSha256: downloaded.sha256,
-              hashVerified: downloaded.verified,
+              downloadPath: result.source.downloadPath,
+              downloadedSha256: result.source.downloadedSha256,
+              hashVerified: result.source.hashVerified,
+              verificationStatus: result.source.verificationStatus,
             }
           : item,
       );
       await persistSources();
-      await openPath(downloaded.path);
       await checkInstalled(source);
     } catch (error) {
-      const verificationFailure = messageOf(error).match(/failed SHA-256 verification\. Expected [a-f0-9]{64}, got ([a-f0-9]{64})\./i);
-      if (verificationFailure) {
-        sources = sources.map((item) =>
-          item.id === source.id
-            ? { ...item, downloadedSha256: verificationFailure[1], hashVerified: false }
-            : item,
-        );
+      const message = messageOf(error);
+      if (message !== "Download cancelled") {
+        setSourceError(source.id, message);
       }
-      const downloadedPath = sources.find((item) => item.id === source.id)?.downloadPath;
-      const detail = downloadedPath
-        ? `The installer downloaded, but it could not be opened (${downloadedPath}): ${messageOf(error)}`
-        : `Could not download the installer: ${messageOf(error)}`;
-      setSourceError(source.id, detail);
     } finally {
-      unlistenProgress?.();
-      downloadProgress = null;
       downloading = null;
+      downloadPaused = false;
+      downloadProgress = null;
     }
+  }
+
+  async function pauseDownload(source: TrackedSource): Promise<void> {
+    await downloadManager.pause(source.id);
+    downloadPaused = true;
+  }
+
+  async function resumeDownload(source: TrackedSource): Promise<void> {
+    await downloadManager.resume(source.id);
+    downloadPaused = false;
+  }
+
+  async function cancelDownload(source: TrackedSource): Promise<void> {
+    await downloadManager.cancel(source.id);
+    downloadPaused = false;
+    downloading = null;
+    downloadProgress = null;
+    sources = sources.map((item) =>
+      item.id === source.id
+        ? { ...item, downloadPath: undefined, downloadedSha256: undefined, hashVerified: undefined }
+        : item,
+    );
   }
 
   async function reopenDownloaded(source: TrackedSource): Promise<void> {
@@ -1717,14 +1733,48 @@
                   {/if}
                 </div>
               {/if}
-              <Button class="detail-download" variant="text" type="button" onclick={() => downloadAndOpen(selectedSource)} disabled={downloading !== null || uninstalling !== null}>
-                {#if downloading === selectedSource.id}
-                  <span class="button-spinner"></span>{downloadStatusLabel}
-                {:else}
+              {#if downloading === selectedSource.id}
+                <div class="download-controls">
+                  {#if downloadPaused}
+                    <Button
+                      class="detail-download"
+                      variant="text"
+                      type="button"
+                      onclick={() => resumeDownload(selectedSource)}
+                      disabled={uninstalling !== null}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="#1f1f1f" aria-hidden="true"><path d="M8,19V5l11,7L8,19Zm2-7Zm0,3.35L15.25,12L10,8.65v6.7Z"/></svg>
+                      Resume
+                    </Button>
+                  {:else}
+                    <Button
+                      class="detail-download"
+                      variant="text"
+                      type="button"
+                      onclick={() => pauseDownload(selectedSource)}
+                      disabled={uninstalling !== null}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="#1f1f1f" aria-hidden="true"><path d="M13,19V5h6V19H13ZM5,19V5h6V19H5Zm10-2h2V7H15V17ZM7,17H9V7H7V17ZM7,7V17V7Zm8,0V17V7Z"/></svg>
+                      Pause
+                    </Button>
+                  {/if}
+                  <Button
+                    class="detail-download"
+                    variant="text"
+                    type="button"
+                    onclick={() => cancelDownload(selectedSource)}
+                    disabled={uninstalling !== null}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="#b00020" aria-hidden="true"><path d="M8,8v8V8ZM6,18V6H18V18H6Zm2-2h8V8H8v8Z"/></svg>
+                    Cancel
+                  </Button>
+                </div>
+              {:else}
+                <Button class="detail-download" variant="text" type="button" onclick={() => downloadAndOpen(selectedSource)} disabled={downloading !== null || uninstalling !== null}>
                   <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></svg>
                   Download release asset
-                {/if}
-              </Button>
+                </Button>
+              {/if}
             {/if}
           </section>
 
@@ -2083,9 +2133,6 @@
   .sidebar-version { display: block; padding: 17px 11px 0; color: #b0afba; font-size: 9px; font-weight: 650; letter-spacing: 1px; }
   .main-content { min-height: 100vh; margin-left: 244px; }
   .topbar { position: sticky; top: 0; z-index: 1; display: flex; height: 65px; align-items: center; justify-content: space-between; padding: 0 48px; border-bottom: 1px solid #ececf2; background: rgb(255 255 255 / 88%); backdrop-filter: blur(12px); }
-  .breadcrumb { display: flex; align-items: center; gap: 11px; color: #93919e; font-size: 12px; }
-  .breadcrumb strong { color: #494854; font-weight: 600; }
-  .crumb-slash { color: #c9c8d0; }
   .sync-indicator { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 20px; background: #f8f7fb; border: 1px solid #e9e7f1; font-size: 12px; color: #6b6a78; font-weight: 500; white-space: nowrap; }
   .sync-indicator.checking { background: #f0e7ff; border-color: #d8c7ff; color: #6148d5; }
   .sync-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #9E9E9E; box-shadow: 0 0 0 3px color-mix(in srgb, #9E9E9E 25%, transparent); }
@@ -2222,17 +2269,17 @@
     outline-offset: 2px;
   }
   :global(.mdc-dialog__button.destructive-button),
-  .destructive-button {
+  :global(.destructive-button) {
     color: var(--accent-strong, #b00020);
     font-weight: 600;
   }
   :global(.mdc-dialog__button.destructive-button):hover,
-  .destructive-button:hover {
+  :global(.destructive-button):hover {
     background: color-mix(in srgb, var(--accent-strong, #b00020) 8%, transparent);
     color: var(--accent-strong, #b00020);
   }
   :global(.mdc-dialog__button.destructive-button):focus-visible,
-  .destructive-button:focus-visible {
+  :global(.destructive-button):focus-visible {
     outline: 2px solid var(--accent-strong, #b00020);
     outline-offset: 2px;
   }
@@ -2439,6 +2486,11 @@
   :global(.detail-download:hover) { background: var(--surface-muted, #eee7f0); }
   :global(.detail-download svg) { width: 19px; height: 19px; fill: currentColor; stroke: none; }
   :global(.detail-download:disabled) { opacity: .65; cursor: wait; }
+  .download-controls { display: flex; gap: 10px; margin: 16px -24px -19px; padding: 0 24px; }
+  .download-controls :global(.detail-download) { flex: 1; width: auto; margin: 0; border-radius: 0; border: 0; border-top: 0; background: transparent; color: var(--muted, #56515d); font-size: 13px; padding: 8px 12px; }
+  .download-controls :global(.detail-download):hover { background: var(--surface-muted, #eee7f0); color: var(--accent, #705394); }
+  .download-controls :global(.detail-download svg) { width: 16px; height: 16px; }
+  .download-controls :global(.detail-download:disabled) { opacity: .5; cursor: not-allowed; }
   .detail-actions { display: flex; gap: 10px; margin-top: 18px; padding: 20px 22px; border-radius: 22px; background: var(--surface, #f7f0f8); }
   .detail-install-button { min-width: 104px; margin-left: auto; padding: 0 22px; border: 0; border-radius: 22px; background: #e9dcff; color: #4e3973; font-size: 15px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
   .detail-install-button:hover:not(:disabled) { background: #ddcaff; }
@@ -2527,12 +2579,10 @@
     .nav-item { color: var(--muted); }
     .nav-item.active { color: var(--accent); background: var(--surface-muted); }
     .system-card { border-color: var(--border); background: var(--surface); }
-    .system-card strong, .breadcrumb strong, h1, h2, .summary-card strong,
+    .system-card strong, h1, h2, .summary-card strong,
     .app-name { color: var(--text); }
     .main-content { background: var(--page); }
     .topbar { border-color: var(--border); background: color-mix(in srgb, var(--page) 88%, transparent); }
-    .breadcrumb { color: var(--muted); }
-    .crumb-slash { color: var(--subtle); }
     .content { width: min(1240px, 100%); padding: 45px 52px 60px; }
     h1 { font-size: 36px; font-weight: 500; letter-spacing: -.8px; }
     .summary-card, .empty-filter, .empty-state {
@@ -2836,22 +2886,6 @@
   :global(.app-card--selected) {
     border-color: var(--accent, #705394);
     background: color-mix(in srgb, var(--accent, #705394) 5%, transparent);
-  }
-  .selection-checkbox {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-right: 8px;
-  }
-  .selection-checkbox input[type="checkbox"] {
-    width: 20px;
-    height: 20px;
-    accent-color: var(--accent, #705394);
-    cursor: pointer;
-  }
-  .pinned-badge {
-    font-size: 12px;
-    margin-right: 4px;
   }
   .category-badges {
     display: flex;
