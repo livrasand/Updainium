@@ -44,7 +44,7 @@ test("critical flow: add app, check update, download, and open installer", async
   const downloaded = await downloadAndOpenFlow(installedSource, {
     invoke: async (command) => {
       if (command === "get_running_app_state") return { running: false, launchPath: null, isSelf: false };
-      if (command === "download_release_asset") {
+      if (command === "download_release_asset_resilient") {
         return {
           path: "/cache/repo-2.0.0.AppImage",
           sha256: "1111111111111111111111111111111111111111111111111111111111111111",

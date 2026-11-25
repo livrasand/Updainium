@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { downloadAndOpenFlow } from "../src/lib/downloadFlow.ts";
+import { downloadAndOpenFlow, createDownloadManager } from "../src/lib/downloadFlow.ts";
 
 const source = {
   id: "source-1",
@@ -22,7 +22,7 @@ test("downloadAndOpenFlow downloads and opens the installer", async () => {
   const result = await downloadAndOpenFlow(source, {
     invoke: async (command, args) => {
       calls.push([command, args]);
-      if (command === "download_release_asset") {
+      if (command === "download_release_asset_resilient") {
         return { path: "/tmp/app.msi", sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", verified: true };
       }
       throw new Error(`unexpected command ${command}`);
@@ -54,7 +54,7 @@ test("downloadAndOpenFlow prepares and quits a running app before downloading", 
       if (command === "quit_running_app") {
         return true;
       }
-      if (command === "download_release_asset") {
+      if (command === "download_release_asset_resilient") {
         return { path: "/tmp/app.msi", sha256: source.sha256, verified: true };
       }
       throw new Error(`unexpected ${command}`);
@@ -64,14 +64,14 @@ test("downloadAndOpenFlow prepares and quits a running app before downloading", 
   });
 
   assert.equal(result.ok, true);
-  assert.deepEqual(commands, ["get_running_app_state", "quit_running_app", "download_release_asset"]);
+  assert.deepEqual(commands, ["get_running_app_state", "quit_running_app", "download_release_asset_resilient"]);
 });
 
 test("downloadAndOpenFlow records a SHA-256 mismatch and does not open the installer", async () => {
   const opened = [];
   const result = await downloadAndOpenFlow(source, {
     invoke: async (command) => {
-      if (command === "download_release_asset") {
+      if (command === "download_release_asset_resilient") {
         throw new Error("The downloaded file failed SHA-256 verification. Expected aaaa, got bbbb.");
       }
       throw new Error(`unexpected ${command}`);
@@ -113,4 +113,33 @@ test("downloadAndOpenFlow requires an asset URL", async () => {
 
   assert.equal(result.ok, false);
   assert.match(result.error ?? "", /no downloadable release asset/);
+});
+
+test("DownloadManager pauses and resumes downloads", async () => {
+  const manager = createDownloadManager({
+    invoke: async (command) => {
+      if (command === "pause_download" || command === "resume_download" || command === "cancel_download") {
+        return undefined;
+      }
+      throw new Error(`unexpected ${command}`);
+    },
+    openPath: async () => {},
+  });
+
+  const states = [];
+  const unsub = manager.onStatusChange((id, status) => states.push(status));
+
+  await manager.pause("source-1");
+  assert.equal(manager.getState("source-1").status, "paused");
+  assert.deepEqual(states, ["paused"]);
+
+  await manager.resume("source-1");
+  assert.equal(manager.getState("source-1").status, "downloading");
+  assert.deepEqual(states, ["paused", "downloading"]);
+
+  await manager.cancel("source-1");
+  assert.equal(manager.getState("source-1").status, "idle");
+  assert.deepEqual(states, ["paused", "downloading", "cancelling", "idle"]);
+
+  unsub();
 });
