@@ -7,11 +7,28 @@
   import { createBackup, parseBackup, parseGistId, restoreSources, type Backup } from "#lib/backup";
   import { registerCommand } from "#lib/commands";
   import { cacheGists, clearCachedGists, readCachedGists, chooseMainBackup, type Gist, type GistRevision } from "#lib/gists";
-  import { getSettings, loadSettings, updateSettings, type Settings } from "#lib/settings.svelte";
+  import { getSetting, getSettings, loadSettings, setSetting, updateSettings, type Settings } from "#lib/settings.svelte";
+  import { normalizeUpdateCheckInterval, updateCheckIntervals, type UpdateCheckInterval } from "#lib/updateSchedule";
   import { showSnackbar } from "#lib/snackbar.svelte";
 
   let backgroundEnabled = $state(false);
   let startOnLogin = $state(false);
+  let updateCheckInterval = $state<UpdateCheckInterval>("disabled");
+  const updateCheckLabels: Record<UpdateCheckInterval, string> = {
+    disabled: "Off",
+    hourly: "Hourly",
+    daily: "Daily",
+    weekly: "Weekly",
+    monthly: "Monthly",
+  };
+  const updateCheckDescriptions: Record<UpdateCheckInterval, string> = {
+    disabled: "Only check when you ask. Updainium won't look for updates in the background.",
+    hourly: "Check your apps every hour and send one summary notification when updates are found.",
+    daily: "Check your apps once a day and send one summary notification when updates are found.",
+    weekly: "Check your apps once a week and send one summary notification when updates are found.",
+    monthly: "Check your apps once a month and send one summary notification when updates are found.",
+  };
+  const updateCheckIndex = $derived(updateCheckIntervals.indexOf(updateCheckInterval));
   let ready = $state(false);
   let busy = $state(false);
   let githubBusy = $state(false);
@@ -129,6 +146,11 @@
     try { await action(); }
     catch (cause) { showSnackbar(messageOf(cause), 6000, "error"); }
     finally { busy = false; }
+  }
+
+  async function setUpdateCheckInterval(interval: UpdateCheckInterval): Promise<void> {
+    updateCheckInterval = interval;
+    await setSetting("plugins.updateChecks.interval", interval);
   }
 
   async function runGithub(action: () => Promise<void>): Promise<void> {
@@ -381,6 +403,7 @@
   onMount(async () => {
     await loadSettings();
     backgroundEnabled = getSettings().backgroundEnabled;
+    updateCheckInterval = normalizeUpdateCheckInterval(getSetting("plugins.updateChecks.interval"));
     try {
       startOnLogin = await isEnabled();
     } catch (cause) {
@@ -470,6 +493,47 @@
             <span class="switch-track"></span>
           </span>
         </label>
+      </section>
+      <section class="settings-group" class:review-dimmed={!!pendingBackup} inert={!!pendingBackup} aria-labelledby="update-checks-heading" style="margin-top: 24px;">
+        <h2 id="update-checks-heading">Automatic update checks</h2>
+        <div class="setting-row interval-row">
+          <span class="setting-copy">
+            <strong>Frequency: {updateCheckLabels[updateCheckInterval]}</strong>
+            <span>{updateCheckDescriptions[updateCheckInterval]}</span>
+          </span>
+          <div class="interval-slider" style="--fill: calc(16px + (100% - 32px) * {updateCheckIndex / (updateCheckIntervals.length - 1)});">
+            <div class="interval-control">
+              <div class="interval-track" aria-hidden="true">
+                {#each updateCheckIntervals as interval, index (interval)}
+                  <span class="interval-stop" class:reached={index <= updateCheckIndex} style="left: calc(16px + (100% - 32px) * {index / (updateCheckIntervals.length - 1)});"></span>
+                {/each}
+              </div>
+              <input
+                class="interval-input"
+                type="range"
+                min="0"
+                max={updateCheckIntervals.length - 1}
+                step="1"
+                value={updateCheckIndex}
+                disabled={!ready || busy}
+                aria-label="Automatic update check interval"
+                aria-valuetext={updateCheckLabels[updateCheckInterval]}
+                oninput={(event) => (updateCheckInterval = updateCheckIntervals[Number(event.currentTarget.value)])}
+                onchange={(event) => run(() => setUpdateCheckInterval(updateCheckIntervals[Number(event.currentTarget.value)]))}
+              />
+            </div>
+            <div class="interval-stops" aria-hidden="true">
+              {#each updateCheckIntervals as interval, index (interval)}
+                <span
+                  class:active={interval === updateCheckInterval}
+                  
+                  
+                  style="left: calc(16px + (100% - 32px) * {index / (updateCheckIntervals.length - 1)});"
+                >{updateCheckLabels[interval]}</span>
+              {/each}
+            </div>
+          </div>
+        </div>
       </section>
       <section class="settings-group backup-group" class:review-dimmed={!!pendingBackup} inert={!!pendingBackup} aria-labelledby="backup-heading">
         <h2 id="backup-heading">Import and export</h2>
@@ -682,6 +746,25 @@
   h2 { margin: 0; padding: 22px 26px 12px; color: var(--text); font-size: 20px; font-weight: 500; }
   .setting-row { display: flex; min-height: 86px; align-items: center; justify-content: space-between; gap: 24px; padding: 17px 26px; cursor: pointer; }
   .setting-row + .setting-row { border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+  .interval-row { align-items: flex-start; }
+  .interval-slider { display: grid; flex: 0 0 320px; gap: 6px; min-width: 220px; padding-top: 4px; }
+  .interval-control { position: relative; height: 44px; }
+  .interval-track { position: absolute; top: 50%; right: 0; left: 0; height: 16px; transform: translateY(-50%); border-radius: 999px; background: linear-gradient(to right, var(--accent, #705394) var(--fill), #e2ddf6 var(--fill)); }
+  .interval-stop { position: absolute; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: var(--accent, #705394); }
+  .interval-stop.reached { background: #fff; }
+  .interval-input { position: absolute; inset: 0 14px; height: 100%; margin: 0; background: transparent; appearance: none; -webkit-appearance: none; cursor: pointer; }
+  .interval-input::-webkit-slider-runnable-track { height: 100%; background: transparent; }
+  .interval-input::-webkit-slider-thumb { -webkit-appearance: none; width: 4px; height: 28px; margin-top: 8px; border: 0; border-radius: 2px; background: var(--accent, #705394); }
+  .interval-input::-moz-range-track { height: 100%; background: transparent; }
+  .interval-input::-moz-range-thumb { width: 4px; height: 28px; margin-top: 8px; border: 0; border-radius: 2px; background: var(--accent, #705394); }
+  .interval-input:focus-visible { outline: none; }
+  .interval-input:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent, #705394) 25%, transparent); }
+  .interval-input:disabled { cursor: default; opacity: .5; }
+  .interval-stops { position: relative; height: 40px; font-size: 12px; color: var(--muted); }
+  .interval-stops span { position: absolute; top: 8px; transform: translateX(-50%); white-space: nowrap; width: 64px; text-align: center; letter-spacing: 0.3px; font-weight: 500; }
+  
+  
+  .interval-stops .active { color: var(--accent); font-weight: 600; }
   .setting-copy { display: grid; gap: 6px; }
   .setting-copy strong { color: var(--text); font-size: 15px; font-weight: 500; }
   .setting-copy span { color: var(--muted); font-size: 13px; line-height: 1.45; }
