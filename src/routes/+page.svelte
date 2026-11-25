@@ -1425,7 +1425,7 @@
     const currentIndex = sortModes.indexOf(sortBy);
     const nextSortBy = sortModes[(currentIndex + 1) % sortModes.length];
     setSortBy(nextSortBy);
-    showSnackbar(`Ordenado por: ${nextSortBy} (${sortDirection === "asc" ? "ascendente" : "descendente"})`);
+    showSnackbar(`Sorted by: ${nextSortBy} (${sortDirection === "asc" ? "ascending" : "descending"})`);
   }
 
   // Get unique categories for filter dropdown
@@ -1917,44 +1917,44 @@
     <button class="bottom-sheet-overlay" onclick={closeFilterSheet} aria-label="Close filter sheet"></button>
     <section class="bottom-sheet filter-sheet" aria-labelledby="filter-title">
       <div class="sheet-header">
-        <h2 id="filter-title">Filtrar apps</h2>
+        <h2 id="filter-title">Filter apps</h2>
         <button class="close-button" type="button" onclick={closeFilterSheet} aria-label="Close filter">
           <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg>
         </button>
       </div>
       <div class="sheet-content">
         <div class="filter-section">
-          <h3>Buscar por</h3>
+          <h3>Search by</h3>
           <label class="filter-field">
-            <span class="filter-label">Nombre de app</span>
-            <input bind:value={filterName} placeholder="Filtrar por nombre de la aplicación" type="text" />
+            <span class="filter-label">App name</span>
+            <input bind:value={filterName} placeholder="Filter by app name" type="text" />
           </label>
           <label class="filter-field">
-            <span class="filter-label">Autor</span>
-            <input bind:value={filterAuthor} placeholder="Filtrar por autor/organización" type="text" />
+            <span class="filter-label">Author</span>
+            <input bind:value={filterAuthor} placeholder="Filter by author/organization" type="text" />
           </label>
           <label class="filter-field">
-            <span class="filter-label">ID de la app</span>
-            <input bind:value={filterAppId} placeholder="Filtrar por identificador de paquete" type="text" />
+            <span class="filter-label">App ID</span>
+            <input bind:value={filterAppId} placeholder="Filter by package identifier" type="text" />
           </label>
         </div>
         <div class="filter-section">
-          <h3>Estado</h3>
+          <h3>Status</h3>
           <label class="filter-toggle">
             <input type="checkbox" bind:value={filterUpdatedOnly} />
-            <span>Aplicaciones actualizadas</span>
+            <span>Updated apps</span>
           </label>
           <label class="filter-toggle">
             <input type="checkbox" bind:value={filterNotInstalledOnly} />
-            <span>Apps no instaladas</span>
+            <span>Apps not installed</span>
           </label>
         </div>
         <div class="filter-section">
-          <h3>Filtrar por fuente</h3>
+          <h3>Filter by source</h3>
           <label class="filter-field">
-            <span class="filter-label">Fuente</span>
+            <span class="filter-label">Source</span>
             <select bind:value={filterSource}>
-              <option value="">Todas las fuentes</option>
+              <option value="">All sources</option>
               {#each allSources as src}
                 <option value={src}>{src}</option>
               {/each}
@@ -1962,11 +1962,11 @@
           </label>
         </div>
         <div class="filter-section">
-          <h3>Categoría / Etiqueta</h3>
+          <h3>Category / Tag</h3>
           <label class="filter-field">
-            <span class="filter-label">Categoría</span>
+            <span class="filter-label">Category</span>
             <select bind:value={filterCategory}>
-              <option value="">Todas las categorías</option>
+              <option value="">All categories</option>
               {#each allCategories as cat}
                 <option value={cat}>{cat}</option>
               {/each}
@@ -1982,8 +1982,8 @@
         </div>
       </div>
       <div class="sheet-actions">
-        <button class="secondary-button" type="button" onclick={clearFilters}>Cancelar</button>
-        <Button class="primary-button" variant="unelevated" type="button" onclick={applyFilters}>Continuar</Button>
+        <button class="secondary-button" type="button" onclick={clearFilters}>Cancel</button>
+        <Button class="primary-button" variant="unelevated" type="button" onclick={applyFilters}>Continue</Button>
       </div>
     </section>
   {/if}
@@ -1992,7 +1992,7 @@
     <button class="bottom-sheet-overlay" onclick={() => { showActionsSheet = false; }} aria-label="Close actions sheet"></button>
     <section class="bottom-sheet actions-sheet" aria-labelledby="actions-title">
       <div class="sheet-header">
-        <h2 id="actions-title">Acciones ({selectedAppIds.size} seleccionadas)</h2>
+        <h2 id="actions-title">Actions ({selectedAppIds.size} selected)</h2>
         <button class="close-button" type="button" onclick={() => { showActionsSheet = false; }} aria-label="Close actions">
           <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg>
         </button>
@@ -2001,23 +2001,23 @@
         <div class="action-list">
           <button class="action-item destructive" type="button" onclick={batchDelete}>
             <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor" aria-hidden="true"><path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"/></svg>
-            <span>Eliminar</span>
+            <span>Delete</span>
           </button>
           <button class="action-item" type="button" onclick={batchCheckRelease}>
             <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor" aria-hidden="true"><path d="M204-318q-22-38-33-78t-11-82q0-134 93-228t227-94h7l-64-64 56-56 160 160-160 160-56-56 64-64h-7q-100 0-170 70.5T240-478q0 26 6 51t18 49l-60 60ZM481-40 321-200l160-160 56 56-64 64h7q100 0 170-70.5T720-482q0-26-6-51t-18-49l60-60q22 38 33 78t11 82q0 134-93 228t-227 94h-7l64 64-56 56Z"/></svg>
-            <span>Comprobar release de nuevo</span>
+            <span>Recheck release</span>
           </button>
           <button class="action-item" type="button" onclick={batchInstallOrUpdate}>
             <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor" aria-hidden="true"><path d="M480-320 280-520l56-58 104 104v-326h80v326l104-104 56 58-200 200ZM240-160q-33 0-56.5-23.5T160-240v-120h80v120h480v-120h80v120q0 33-23.5 56.5T720-160H240Z"/></svg>
-            <span>Instalar o actualizar</span>
+            <span>Install or update</span>
           </button>
           <button class="action-item" type="button" onclick={batchPin}>
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M16,12l2,2v2H13v6l-1,1l-1-1V16H6V14l2-2V5H7V3H17V5H16v7ZM8.85,14h6.3L14,12.85V5H10v7.85L8.85,14ZM12,14Z"/></svg>
-            <span>Anclar al principio</span>
+            <span>Pin to top</span>
           </button>
           <button class="action-item" type="button" onclick={batchUnpin}>
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" height="20px" width="20px" fill="currentColor" aria-hidden="true"><path d="M17,3V5H16v8.17l-2-2V5H10V7.18L7.83,5L7,4.17V3H17ZM12,23l-1-1V16H6V14l2-2V10.85L1.4,4.2L2.8,2.8L21.2,21.2l-1.45,1.4L13.15,16H13v6l-1,1ZM8.85,14h2.3l-1.1-1.1L10,12.85L8.85,14ZM12,9.17ZM10.05,12.9Z"/></svg>
-            <span>Desanclar</span>
+            <span>Unpin</span>
           </button>
 
         </div>
