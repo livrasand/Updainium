@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 #[cfg(not(target_os = "macos"))]
 use tauri::menu::Submenu;
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     webview::PageLoadEvent,
     Emitter, Manager,
@@ -109,6 +109,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
@@ -162,9 +163,14 @@ pub fn run() {
                 show_main_window(&open_url_handle);
             });
 
+            let status = MenuItem::with_id(app, "update-status", "No update checks yet", false, None::<&str>)?;
+            let show_updates = MenuItem::with_id(app, "show-updates", "Show available updates", true, None::<&str>)?;
+            let check_now = MenuItem::with_id(app, "check-now", "Check for updates now", true, None::<&str>)?;
             let open = MenuItem::with_id(app, "open", "Open Updainium", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &quit])?;
+            let separator = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(app, &[&status, &show_updates, &check_now, &separator, &open, &quit])?;
+            app.manage(TrayStatusItem(status));
             let icon = app
                 .default_window_icon()
                 .cloned()
@@ -176,6 +182,14 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "open" => show_main_window(app),
+                    "show-updates" => {
+                        show_main_window(app);
+                        let _ = app.emit("tray-show-updates", ());
+                    }
+                    "check-now" => {
+                        show_main_window(app);
+                        let _ = app.emit("tray-check-updates", ());
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -214,6 +228,7 @@ pub fn run() {
             github::github_api_token_validate,
             get_platform,
             set_background_mode,
+            set_tray_update_status,
             process::get_running_app_state,
             process::quit_running_app,
             process::open_installed_app,
@@ -287,6 +302,18 @@ fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+struct TrayStatusItem(MenuItem<tauri::Wry>);
+
+#[tauri::command]
+fn set_tray_update_status(status: tauri::State<'_, TrayStatusItem>, count: usize) -> Result<(), String> {
+    let text = match count {
+        0 => "Everything is up to date".to_string(),
+        1 => "1 update available".to_string(),
+        n => format!("{n} updates available"),
+    };
+    status.0.set_text(text).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

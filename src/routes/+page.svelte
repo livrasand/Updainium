@@ -19,6 +19,8 @@
   import { showSnackbar } from "#lib/snackbar.svelte";
   import { createDownloadManager } from "#lib/downloadFlow";
 import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
+  import { availableUpdateSignature, isUpdateCheckDue, normalizeUpdateCheckInterval } from "#lib/updateSchedule";
+  import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
   import Button from "@smui/button";
   import Card from "@smui/card";
   import Dialog, { Title as DialogTitle, Content as DialogContent, Actions as DialogActions } from "@smui/dialog";
@@ -109,6 +111,7 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
   let installedVersionDraft = $state("");
   let resumeSessions = $state<Record<string, ResumeSession | undefined>>({});
   let resumeLaunching = $state(false);
+  let scheduledCheckRunning = false;
 
   // Filter, sort, and multi-select state
   let showFilterSheet = $state(false);
@@ -487,6 +490,39 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
   });
 
 
+
+  onMount(() => {
+    const timer = setInterval(() => {
+      if (!ready) return;
+      const interval = normalizeUpdateCheckInterval(getSetting("plugins.updateChecks.interval"));
+      const lastCheckedAt = getSetting("plugins.updateChecks.lastCheckedAt") as number | undefined;
+      if (isUpdateCheckDue(interval, lastCheckedAt, Date.now())) void runUpdateCheck({ notify: false });
+    }, 60_000);
+    return () => clearInterval(timer);
+  });
+
+  onMount(() => {
+    let disposed = false;
+    const unlisteners: (() => void)[] = [];
+    const register = (promise: Promise<() => void>): void => {
+      void promise.then((stopListening) => {
+        if (disposed) stopListening();
+        else unlisteners.push(stopListening);
+      });
+    };
+    register(
+      listen("tray-show-updates", () => {
+        showAddSection = false;
+        selectedSourceId = null;
+        filterUpdatedOnly = true;
+      }),
+    );
+    register(listen("tray-check-updates", () => void runUpdateCheck({ notify: true })));
+    return () => {
+      disposed = true;
+      unlisteners.forEach((stopListening) => stopListening());
+    };
+  });
 
   onMount(() => {
     const disposers = [
@@ -975,7 +1011,49 @@ import { createUpdateAllManager, getEligibleUpdates } from "#lib/updateAll";
       ...sources.map((source) => checkInstalled(source)),
     ]);
     const updatesAvailable = sources.some((source) => hasUpdate(source));
+    setTrayUpdateStatus(getEligibleUpdates(sources, installedVersions).length);
     showSnackbar(updatesAvailable ? "Updates available" : "All your apps are up to date");
+  }
+
+  function setTrayUpdateStatus(count: number): void {
+    invoke("set_tray_update_status", { count }).catch((error) => {
+      showSnackbar(`Could not update the tray status: ${messageOf(error)}`, 6000, "error");
+    });
+  }
+
+  async function notifyUpdatesAvailable(count: number): Promise<void> {
+    try {
+      const granted = (await isPermissionGranted()) || (await requestPermission()) === "granted";
+      if (!granted) return;
+      sendNotification({
+        title: "Updainium — Updates available",
+        body: `${count} ${count === 1 ? "application has" : "applications have"} available updates.`,
+      });
+    } catch (error) {
+      showSnackbar(`Could not send the update notification: ${messageOf(error)}`, 6000, "error");
+    }
+  }
+
+  async function runUpdateCheck(options: { notify: boolean }): Promise<void> {
+    if (scheduledCheckRunning || checking.length > 0 || anyOperationInFlight() || !sources.length) return;
+    scheduledCheckRunning = true;
+    try {
+      const targets = sources.filter((source) => !isIgnored(source));
+      await Promise.all(targets.map((source) => refreshSource(source)));
+      const updates = getEligibleUpdates(sources, installedVersions);
+      const signature = availableUpdateSignature(updates);
+      const previousSignature = getSetting("plugins.updateChecks.notifiedSignature");
+      setTrayUpdateStatus(updates.length);
+      if (updates.length > 0 && (options.notify || signature !== previousSignature)) {
+        await notifyUpdatesAvailable(updates.length);
+      }
+      await setSetting("plugins.updateChecks.notifiedSignature", updates.length > 0 ? signature : "");
+      await setSetting("plugins.updateChecks.lastCheckedAt", Date.now());
+    } catch (error) {
+      showSnackbar(`Could not complete the update check: ${messageOf(error)}`, 6000, "error");
+    } finally {
+      scheduledCheckRunning = false;
+    }
   }
 
   async function updateAllApps(): Promise<void> {
