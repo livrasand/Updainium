@@ -429,7 +429,7 @@
 <main class="settings-page">
   <section class="content">
       <div class="page-heading">
-      <a class="back-button" href="/" aria-label="Back to apps" title="Back to apps">
+      <a class="back-button" href="/" aria-label="Back to apps" data-tooltip="Back to apps">
         <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor" aria-hidden="true"><path d="M640-80 240-480l400-400 71 71-329 329 329 329-71 71Z"/></svg>
       </a>
       <div>

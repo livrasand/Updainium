@@ -338,6 +338,33 @@
 {/if}
 
 <style>
+  :global([data-tooltip]) {
+    position: relative;
+  }
+  :global([data-tooltip]::after) {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: #3b3940;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.2;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 60;
+    transition: opacity 0.15s ease;
+  }
+  :global([data-tooltip]:hover::after),
+  :global([data-tooltip]:focus-visible::after) {
+    opacity: 1;
+    transition-delay: 0.3s;
+  }
   .snackbar { position: fixed; right: 0; bottom: 24px; left: 0; z-index: 60; display: flex; width: fit-content; max-width: min(560px, calc(100vw - 40px)); max-height: 60vh; align-items: center; gap: 8px; margin: 0 auto; overflow-y: auto; padding: 12px 10px 12px 18px; border-radius: 10px; background: #2f2b36; box-shadow: 0 8px 24px rgb(24 19 32 / 28%); color: #f4f1f8; font: 13px/1.45 "Roboto", "Segoe UI", sans-serif; white-space: pre-line; }
   .snackbar.error { background: #7f2c2c; color: #fff; }
   .snackbar-label { min-width: 0; }
