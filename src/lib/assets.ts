@@ -3,7 +3,7 @@ export type Architecture = "auto" | "x86_64" | "aarch64" | "x86" | "arm";
 export type ReleaseAsset = { name: string; browser_download_url: string; sha256?: string | null };
 
 export const formats: Record<string, string[]> = {
-  windows: [".msi", ".exe"],
+  windows: [".msi", ".exe", ".zip"],
   macos: [".dmg", ".pkg"],
   linux: [".appimage", ".deb", ".rpm"],
 };
