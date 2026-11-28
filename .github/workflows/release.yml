@@ -56,6 +56,14 @@ jobs:
           # Let the macOS bundler lay out the DMG window (background and icon
           # positions) instead of skipping it because of the CI environment.
           TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+      - name: Build portable Windows zip
+        if: runner.os == 'Windows'
+        run: |
+          npm run tauri -- build --no-bundle --config '{ "app": { "appDirectoriesOverride": "./app-data" } }'
+          $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $out = "src-tauri/target/release/bundle/portable"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Compress-Archive -Path "src-tauri/target/release/updainium.exe" -DestinationPath "$out/Updainium_${version}_x64_portable.zip" -Force
       - name: Verify Linux glibc baseline
         if: runner.os == 'Linux'
         run: |
@@ -98,7 +106,7 @@ jobs:
       - name: Prepare release assets and checksums
         run: |
           mkdir release
-          find dist -type f \( -iname '*.appimage' -o -iname '*.deb' -o -iname '*.dmg' -o -iname '*.exe' -o -iname '*.msi' -o -iname '*.rpm' \) -exec cp {} release/ \;
+          find dist -type f \( -iname '*.appimage' -o -iname '*.deb' -o -iname '*.dmg' -o -iname '*.exe' -o -iname '*.msi' -o -iname '*.rpm' -o -iname '*.zip' \) -exec cp {} release/ \;
           test -n "$(find release -type f -print -quit)"
           (cd release && sha256sum * > SHA256SUMS)
       - name: Publish GitHub release
